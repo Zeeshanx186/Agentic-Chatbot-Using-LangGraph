@@ -1,7 +1,9 @@
+# CPU-only torch. The default wheel is the CUDA build and drags in several GB
+# of NVIDIA libraries the container can never use.
 --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Core app
-streamlit
+streamlit==1.62.0
 python-dotenv==1.2.2
 requests==2.34.2
 pydantic==2.13.4
@@ -16,11 +18,31 @@ langchain-core==1.5.1
 langchain-community==0.4.2
 langchain-text-splitters==1.1.2
 langchain-groq==1.1.3
-langchain-google-genai
+groq==0.37.1
 langchain-tavily
+langchain-google-genai
+langchain-openai==1.4.1
 
 # RAG: PDF loading, embeddings, vector store
 pypdf==6.14.2
 langchain-huggingface==1.2.2
 sentence-transformers==5.6.1
 faiss-cpu
+
+# Data tools: spreadsheet ingest and DataFrame output
+pandas
+numpy
+openpyxl
+xlrd==2.0.2
+tabulate
+
+# Search tools
+wikipedia
+ddgs
+
+# Web page scraping
+beautifulsoup4
+
+# OCR for scanned PDFs (pulls onnxruntime)
+rapidocr
+

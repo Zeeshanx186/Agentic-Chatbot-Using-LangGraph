@@ -389,7 +389,7 @@ messages = history()
 suggested_prompt = None
 
 with st.container(horizontal=True, vertical_alignment="center"):
-    st.title("Agentic chatbot", width="stretch")
+    st.title("🤖Agentic chatbot", width="stretch")
     st.badge(st.session_state.model_id, icon=":material/bolt:", color="primary")
 
 if not messages:

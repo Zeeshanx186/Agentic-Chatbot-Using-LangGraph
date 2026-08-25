@@ -18,7 +18,6 @@ stock lookup, math, and RAG over uploaded PDFs. Runs locally or in Docker.
   - [Remove images](#remove-images)
   - [Cleanup and disk space](#cleanup-and-disk-space)
   - [Rebuild loop](#rebuild-loop)
-- [CI/CD](#cicd)
 - [Troubleshooting](#troubleshooting)
 - [Project files](#project-files)
 - [Notes and TODO](#notes-and-todo)
@@ -33,7 +32,7 @@ Image already built, just want it running:
 docker run -d --name agenticbot -p 8502:8501 --env-file .env zeeshanyq/agenticbot:latest
 ```
 
-Open <http://localhost:8502>
+Open [http://localhost:850](http://localhost:8502)1
 
 ---
 
@@ -42,20 +41,20 @@ Open <http://localhost:8502>
 All secrets live in `.env` at the project root. **Not committed** — excluded by
 `.gitignore` and `.dockerignore`.
 
-| Variable | Required | Used for |
-|---|---|---|
-| `GROQ_API_KEY` | yes | Main LLM provider |
-| `TAVILY_API_KEY` | yes | Web search tool |
-| `OPENWEATHER_API_KEY` | for weather tool | Weather lookups |
-| `WEATHERSTACK_API_KEY` | optional | Alternate weather source |
-| `ALPHAVANTAGE_API_KEY` | for stock tool | Stock prices |
-| `OPENROUTER_API_KEY` | optional | OpenRouter models in picker |
-| `OPENAI_API_KEY` | optional | OpenAI models |
-| `GOOGLE_API_KEY` | for Google models | Gemini models in picker — **currently missing** |
-| `LANGSMITH_TRACING` | optional | Trace runs to LangSmith |
-| `LANGSMITH_ENDPOINT` | optional | LangSmith endpoint |
-| `LANGSMITH_API_KEY` | optional | LangSmith auth |
-| `LANGSMITH_PROJECT` | optional | LangSmith project name |
+| Variable                 | Required          | Used for                                              |
+| ------------------------ | ----------------- | ----------------------------------------------------- |
+| `GROQ_API_KEY`         | yes               | Main LLM provider                                     |
+| `TAVILY_API_KEY`       | yes               | Web search tool                                       |
+| `OPENWEATHER_API_KEY`  | for weather tool  | Weather lookups                                       |
+| `WEATHERSTACK_API_KEY` | optional          | Alternate weather source                              |
+| `ALPHAVANTAGE_API_KEY` | for stock tool    | Stock prices                                          |
+| `OPENROUTER_API_KEY`   | optional          | OpenRouter models in picker                           |
+| `OPENAI_API_KEY`       | optional          | OpenAI models                                         |
+| `GOOGLE_API_KEY`       | for Google models | Gemini models in picker —**currently missing** |
+| `LANGSMITH_TRACING`    | optional          | Trace runs to LangSmith                               |
+| `LANGSMITH_ENDPOINT`   | optional          | LangSmith endpoint                                    |
+| `LANGSMITH_API_KEY`    | optional          | LangSmith auth                                        |
+| `LANGSMITH_PROJECT`    | optional          | LangSmith project name                                |
 
 ### Format matters
 
@@ -88,7 +87,7 @@ Run:
 uv run streamlit run app.py
 ```
 
-Opens on <http://localhost:8501>
+Opens on [http://localhost:8501](http://localhost:8501)
 
 ---
 
@@ -270,260 +269,6 @@ Step 2 is fast unless `requirements.txt` changed.
 
 ---
 
-## CI/CD
-
-Workflow: [`.github/workflows/cicd.yaml`](.github/workflows/cicd.yaml)
-
-Three jobs, run in order. Triggered by pushes to `main`, pull requests to
-`main`, and manually from the Actions tab.
-
-| Job | Runs on | Does |
-|---|---|---|
-| `lint` | GitHub runner | flake8. Fails only on syntax errors and undefined names; style issues are advisory |
-| `push_to_registry` | GitHub runner | Builds the image. **Pushes only on `main`** — PRs build to verify the Dockerfile, never publish |
-| `continuous_deployment` | **self-hosted runner on EC2** | Pulls the image, replaces the `stapp` container, verifies it is running and healthy |
-
-The deploy job runs **on the EC2 box itself**. There is no SSH step and no
-private key stored in GitHub — the runner polls GitHub for work, so every
-`docker` command executes locally on that machine.
-
----
-
-### AWS setup, step by step
-
-Do these in order. Steps 1-3 are the machine, step 4 connects it to GitHub.
-
-#### 1. Launch the EC2 instance
-
-| Setting | Value | Why |
-|---|---|---|
-| AMI | Ubuntu Server 24.04 LTS | |
-| Instance type | **t3.medium** minimum | The image is ~2GB and importing torch needs real RAM. t2.micro will OOM or thrash |
-| Storage | **30 GB** gp3 | Default 8GB cannot hold the image plus a rollback copy plus the runner |
-| Key pair | Create one, download the `.pem` | Needed for your own SSH access, not for the pipeline |
-
-t3.medium is not free tier. If cost matters, stop the instance when you are not
-using it — you pay for the EBS volume either way, but not the compute.
-
-#### 2. Security group
-
-Inbound rules:
-
-| Type | Port | Source |
-|---|---|---|
-| SSH | 22 | **My IP** |
-| Custom TCP | 8501 | My IP, or `0.0.0.0/0` if you want to share the demo |
-
-Leave outbound at default (all traffic) — the runner needs to reach GitHub and
-Docker Hub.
-
-Never open 22 to `0.0.0.0/0`.
-
-#### 3. Install Docker on the instance
-
-SSH in with your `.pem`, then:
-
-```bash
-sudo apt-get update && sudo apt-get install -y ca-certificates curl
-```
-
-```bash
-curl -fsSL https://get.docker.com | sudo sh
-```
-
-```bash
-sudo usermod -aG docker $USER && newgrp docker
-```
-
-Verify — this must succeed **without `sudo`**, or the runner will not be able to
-drive Docker:
-
-```bash
-docker run --rm hello-world
-```
-
-#### 4. Install the GitHub Actions self-hosted runner
-
-In your repo: **Settings → Actions → Runners → New self-hosted runner**, pick
-**Linux / x64**. GitHub shows a set of commands containing a one-time token —
-use the ones from that page, not copies from anywhere else, because the token
-is short-lived and repo-specific.
-
-They look like this:
-
-```bash
-mkdir actions-runner && cd actions-runner
-```
-
-```bash
-curl -o actions-runner-linux-x64.tar.gz -L https://github.com/actions/runner/releases/download/v2.xxx.x/actions-runner-linux-x64-2.xxx.x.tar.gz
-```
-
-```bash
-tar xzf ./actions-runner-linux-x64.tar.gz
-```
-
-```bash
-./config.sh --url https://github.com/Zeeshanx186/Agentic-Chatbot-Using-LangGraph --token <TOKEN_FROM_GITHUB>
-```
-
-At the prompts: accept the default runner group, accept the default name, and
-**leave labels empty** — the default label is `self-hosted`, which is exactly
-what the workflow's `runs-on: self-hosted` matches. Adding a custom label here
-without changing the workflow is the usual reason a deploy job hangs forever in
-"Waiting for a runner".
-
-Then install it as a service, so it survives logout and reboots:
-
-```bash
-sudo ./svc.sh install
-```
-
-```bash
-sudo ./svc.sh start
-```
-
-Check it:
-
-```bash
-sudo ./svc.sh status
-```
-
-The runner should now show as **Idle** under Settings → Actions → Runners.
-
-`./run.sh` also works but dies the moment your SSH session closes. Use the
-service.
-
----
-
-### Required GitHub secrets
-
-**Settings → Secrets and variables → Actions → New repository secret.**
-
-Docker Hub:
-
-| Secret | Value |
-|---|---|
-| `REGISTRY` | `docker.io`. Optional — the workflow falls back to `docker.io` if unset |
-| `DOCKER_USERNAME` | `zeeshanyq` |
-| `DOCKER_PASSWORD` | A Docker Hub **access token** — hub.docker.com → Account Settings → Personal access tokens. The name says password; use a token. Tokens are scoped and revocable, your account password is neither |
-| `IMAGE_NAME` | `agenticbot` — just the repository name, no username and no tag. The workflow builds the full path as `REGISTRY/DOCKER_USERNAME/IMAGE_NAME` |
-
-Whatever you set `IMAGE_NAME` to becomes the Docker Hub repository name. Your
-local image is `zeeshanyq/agenticbot`, so `agenticbot` keeps the two in step. If
-you set something else, the pipeline still works — it just publishes to a
-different repository than the one you build locally.
-
-### Secrets this project does NOT need
-
-Some setup guides list AWS credentials as repository secrets:
-
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
-- `AWS_REGION`
-
-**Do not create these.** They are needed only when the pipeline calls the AWS
-API — pushing to ECR, or provisioning infrastructure. This pipeline does
-neither: the image goes to Docker Hub, and the deploy runs on a self-hosted
-runner that is already inside your EC2 instance, so nothing ever authenticates
-to AWS from GitHub.
-
-An `AWS_SECRET_ACCESS_KEY` is a long-lived credential to your whole AWS account.
-Storing one that nothing reads is pure downside — it can leak but can never be
-useful. Skip them.
-
-Other secrets:
-
-Application keys — same values as your local `.env`, one secret each:
-
-| Secret | Required |
-|---|---|
-| `GROQ_API_KEY` | yes, deploy fails without it |
-| `TAVILY_API_KEY` | yes |
-| `OPENWEATHER_API_KEY` | yes |
-| `ALPHAVANTAGE_API_KEY` | yes |
-| `WEATHERSTACK_API_KEY` | optional |
-| `OPENROUTER_API_KEY` | optional |
-| `OPENAI_API_KEY` | optional |
-| `GOOGLE_API_KEY` | optional, needed for Gemini models |
-| `LANGSMITH_TRACING` | optional |
-| `LANGSMITH_ENDPOINT` | optional |
-| `LANGSMITH_API_KEY` | optional |
-| `LANGSMITH_PROJECT` | optional |
-
-Paste **only the value** into the secret box — no quotes, no `KEY=` prefix, no
-trailing spaces. GitHub stores exactly what you paste.
-
-No `.env` file is needed on the server. The deploy job passes each secret to
-`docker run` with a bare `-e VAR` flag, which forwards the value from the step's
-environment — so no secret value is ever written into a command line or shown in
-the run log.
-
-The four keys marked required are checked before the running container is
-touched. The optional ones are forwarded whether set or not; an unset secret
-arrives as an empty string, which the app treats as absent.
-
----
-
-### After deploying
-
-App URL: `http://<EC2_PUBLIC_IP>:8501`
-
-Each push to `main` publishes three tags:
-
-- `zeeshanyq/agenticbot:main` — **the tag the deploy job pulls**, from the branch name
-- `zeeshanyq/agenticbot:sha-abc1234` — immutable, pinned to that commit
-- `zeeshanyq/agenticbot:latest` — convenience tag for local use
-
-The deploy pulls `:main`, not `:latest`. If you change the branch name or the
-tagging rules, that pull breaks — they have to stay in step.
-
-### Rollback
-
-There is no automatic rollback. If a deploy goes bad, run a known-good sha tag
-on the box by hand:
-
-```bash
-docker rm -f stapp
-```
-
-```bash
-docker run -d --restart unless-stopped --name stapp -p 8501:8501 --env-file ~/.env zeeshanyq/agenticbot:sha-abc1234
-```
-
-That needs an `.env` on the server, since you are outside the pipeline that
-supplies the secrets. Image pruning keeps anything newer than 24h, so recent
-sha tags are still on disk.
-
-### Container commands on the server
-
-The deployed container is named **`stapp`**, not `agenticbot` — the local
-examples earlier in this file use `agenticbot`, the pipeline uses `stapp`.
-
-```bash
-docker ps --filter "name=^stapp$"
-```
-
-```bash
-docker logs -f stapp
-```
-
-### Checking the runner
-
-On the EC2 box:
-
-```bash
-sudo ~/actions-runner/svc.sh status
-```
-
-Runner logs, when a job never starts:
-
-```bash
-sudo journalctl -u "actions.runner.*" -n 50 --no-pager
-```
-
----
-
 ## Troubleshooting
 
 ### `Could not open requirements file: requirements.txt`
@@ -578,17 +323,17 @@ need a GPU, and containers have no GPU access unless explicitly configured.
 
 ## Project files
 
-| File | Purpose |
-|---|---|
-| `app.py` | Streamlit UI, chat loop, file upload |
-| `backend.py` | LangGraph graph, tools, model selection |
-| `chat_store.py` | Chat persistence, titles, model catalog |
-| `pyproject.toml` + `uv.lock` | Dependencies for local dev (uv) |
-| `requirements.txt` | Dependencies for the Docker build (pip) |
-| `Dockerfile` | Image definition |
-| `.dockerignore` | Keeps secrets, `.git`, and local DBs out of the image |
-| `.env` | API keys — never committed |
-| `agentic_chatbot.db` | SQLite checkpointer, local chat history |
+| File                             | Purpose                                                |
+| -------------------------------- | ------------------------------------------------------ |
+| `app.py`                       | Streamlit UI, chat loop, file upload                   |
+| `backend.py`                   | LangGraph graph, tools, model selection                |
+| `chat_store.py`                | Chat persistence, titles, model catalog                |
+| `pyproject.toml` + `uv.lock` | Dependencies for local dev (uv)                        |
+| `requirements.txt`             | Dependencies for the Docker build (pip)                |
+| `Dockerfile`                   | Image definition                                       |
+| `.dockerignore`                | Keeps secrets,`.git`, and local DBs out of the image |
+| `.env`                         | API keys — never committed                            |
+| `agentic_chatbot.db`           | SQLite checkpointer, local chat history                |
 
 ---
 

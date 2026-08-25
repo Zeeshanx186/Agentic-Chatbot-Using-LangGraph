@@ -216,3 +216,11 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Project-specific
+.env.*
+*.bak
+agentic_chatbot.db
+agentic_chatbot.db-shm
+agentic_chatbot.db-wal
+chat_titles.json

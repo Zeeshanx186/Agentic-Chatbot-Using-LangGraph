@@ -1,0 +1,246 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# The self-hosted runner is one machine. Two deploys at once would fight over
+# the same container name and port. Queue them; never cancel a deploy that is
+# already replacing the running container.
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ==========================================================================
+  # 1. LINT
+  # ==========================================================================
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install Linting Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install flake8
+
+      - name: Lint with flake8
+        env:
+          # Without this flake8 walks any virtualenv present and can die on a
+          # dependency's source (sympy triggers a RecursionError in pyflakes).
+          EXCLUDES: .venv,venv,.git,__pycache__,build,dist
+        run: |
+          # Hard failures only: syntax errors and undefined names.
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics --exclude "$EXCLUDES"
+          # Style report, advisory only.
+          flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics --exclude "$EXCLUDES"
+
+  # ==========================================================================
+  # 2. BUILD AND PUSH TO DOCKER HUB
+  # ==========================================================================
+  push_to_registry:
+    name: Build and Push Docker Image
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Pull requests build to prove the Dockerfile still works, but never log
+      # in and never push. Only main publishes.
+      - name: Log in to Docker Hub
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          # Defaults to docker.io when the REGISTRY secret is not set, so the
+          # pipeline works either way.
+          registry: ${{ secrets.REGISTRY || 'docker.io' }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # The deploy job pulls "<image>:main", so a branch tag must exist.
+      # type=ref,event=branch produces exactly that on a push to main.
+      # The short-sha tag is immutable, for pinning or manual rollback.
+      - name: Extract Docker Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.REGISTRY || 'docker.io' }}/${{ secrets.DOCKER_USERNAME }}/${{ secrets.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,format=short
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Registry cache keeps the ~1GB torch layer off the wire on reruns.
+          # PRs read the cache but must not write to it (not logged in).
+          cache-from: type=registry,ref=${{ secrets.REGISTRY || 'docker.io' }}/${{ secrets.DOCKER_USERNAME }}/${{ secrets.IMAGE_NAME }}:buildcache
+          cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}/{1}/{2}:buildcache,mode=max', secrets.REGISTRY || 'docker.io', secrets.DOCKER_USERNAME, secrets.IMAGE_NAME) || '' }}
+
+  # ==========================================================================
+  # 3. DEPLOY TO AWS EC2 SELF-HOSTED RUNNER
+  # ==========================================================================
+  # Runs ON the EC2 box. No SSH, no private key in GitHub — the runner polls
+  # GitHub for work, so every docker command below executes locally.
+  continuous_deployment:
+    name: Deploy to AWS EC2
+    needs: push_to_registry
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: self-hosted
+
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.REGISTRY || 'docker.io' }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # Fail before touching the running container. A missing key otherwise
+      # yields a container that starts clean, looks healthy, and fails on
+      # every tool call at request time.
+      - name: Validate application secrets
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+        run: |
+          if [ -z "$GROQ_API_KEY" ]; then
+            echo "GROQ_API_KEY secret is missing."
+            exit 1
+          fi
+
+          if [ -z "$TAVILY_API_KEY" ]; then
+            echo "TAVILY_API_KEY secret is missing."
+            exit 1
+          fi
+
+          if [ -z "$OPENWEATHER_API_KEY" ]; then
+            echo "OPENWEATHER_API_KEY secret is missing."
+            exit 1
+          fi
+
+          if [ -z "$ALPHAVANTAGE_API_KEY" ]; then
+            echo "ALPHAVANTAGE_API_KEY secret is missing."
+            exit 1
+          fi
+
+          echo "All required application secrets are configured."
+
+      - name: Pull latest Docker image
+        env:
+          IMAGE_PATH: ${{ secrets.REGISTRY || 'docker.io' }}/${{ secrets.DOCKER_USERNAME }}/${{ secrets.IMAGE_NAME }}
+        run: |
+          docker pull "${IMAGE_PATH}:main"
+
+      - name: Stop and remove existing container
+        run: |
+          docker stop stapp || echo "Container is not running."
+          docker rm stapp || echo "Container does not exist."
+
+      - name: Run Streamlit container
+        env:
+          IMAGE_PATH: ${{ secrets.REGISTRY || 'docker.io' }}/${{ secrets.DOCKER_USERNAME }}/${{ secrets.IMAGE_NAME }}
+
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
+          ALPHAVANTAGE_API_KEY: ${{ secrets.ALPHAVANTAGE_API_KEY }}
+
+          WEATHERSTACK_API_KEY: ${{ secrets.WEATHERSTACK_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+
+          LANGSMITH_TRACING: ${{ secrets.LANGSMITH_TRACING }}
+          LANGSMITH_ENDPOINT: ${{ secrets.LANGSMITH_ENDPOINT }}
+          LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
+          LANGSMITH_PROJECT: ${{ secrets.LANGSMITH_PROJECT }}
+        run: |
+          # -e VAR with no '=' forwards the value from this step's env, so no
+          # secret is ever written into the command line or the run log.
+          docker run -d \
+            --restart unless-stopped \
+            --name stapp \
+            -p 8501:8501 \
+            -e GROQ_API_KEY \
+            -e TAVILY_API_KEY \
+            -e OPENWEATHER_API_KEY \
+            -e ALPHAVANTAGE_API_KEY \
+            -e WEATHERSTACK_API_KEY \
+            -e OPENROUTER_API_KEY \
+            -e OPENAI_API_KEY \
+            -e GOOGLE_API_KEY \
+            -e LANGSMITH_TRACING \
+            -e LANGSMITH_ENDPOINT \
+            -e LANGSMITH_API_KEY \
+            -e LANGSMITH_PROJECT \
+            "${IMAGE_PATH}:main"
+
+      - name: Verify container is running
+        run: |
+          if [ "$(docker inspect -f '{{.State.Running}}' stapp 2>/dev/null)" != "true" ]; then
+            echo "The Streamlit container is not running. Recent logs:"
+            docker logs --tail 100 stapp 2>&1 || true
+            exit 1
+          fi
+
+          echo "The Streamlit container is running."
+          docker ps --filter "name=^stapp$"
+
+      - name: Verify Streamlit health endpoint
+        run: |
+          # This image imports torch and sentence-transformers at startup, so
+          # "the process exists" is not the same as "the app is ready", and a
+          # config crash lands later still. Poll the real health endpoint.
+          for attempt in $(seq 1 12); do
+            if docker exec stapp python -c \
+              "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=3)" \
+              >/dev/null 2>&1; then
+
+              echo "Streamlit application is healthy."
+              exit 0
+            fi
+
+            echo "Waiting for Streamlit to become ready..."
+            sleep 5
+          done
+
+          echo "Streamlit did not become healthy."
+          docker logs --tail 100 stapp 2>&1 || true
+          exit 1
+
+      # EC2 root volumes are small and this image is ~2GB per tag. Runs even
+      # when the deploy failed, so a red pipeline cannot fill the disk.
+      - name: Clean up old images
+        if: always()
+        run: |
+          docker image prune -af --filter "until=24h" || true
+          df -h / | tail -1

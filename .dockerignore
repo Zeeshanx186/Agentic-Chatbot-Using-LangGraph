@@ -1,0 +1,15 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+*.db
+*.db-shm
+*.db-wal
+chat_titles.json
+requirements.txt.bak
+uv.lock
+.env.bak
+requirements.txt.bak

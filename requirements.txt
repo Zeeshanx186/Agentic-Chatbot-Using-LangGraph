@@ -4,6 +4,7 @@
 
 # Core app
 streamlit==1.62.0
+chainlit==2.12.0
 python-dotenv==1.2.2
 requests==2.34.2
 pydantic==2.13.4
@@ -22,6 +23,7 @@ groq==0.37.1
 langchain-tavily
 langchain-google-genai
 langchain-openai==1.4.1
+langchain-ollama==1.1.0
 
 # RAG: PDF loading, embeddings, vector store
 pypdf==6.14.2

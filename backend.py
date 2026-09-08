@@ -1254,6 +1254,27 @@ def set_model(model_id: str, provider: str = "groq"):
     elif provider == "openai":
         from langchain_openai import ChatOpenAI
         llm = ChatOpenAI(model=model_id, temperature=0)
+    elif provider == "ollama":
+        # ChatOpenAI against Ollama's OpenAI-compatible /v1 endpoint used to be
+        # here, but that endpoint ignores the "think" field entirely - Qwen3's
+        # thinking mode (on by default, "capabilities": ["...", "thinking"] in
+        # `ollama list`) stayed on for every one of this graph's several LLM
+        # calls per turn (supervisor, agent, synthesizer), each paying for a
+        # full hidden reasoning trace. Measured locally: 17-21s per call with
+        # thinking on vs 0.3-0.6s with it off via the native API's "think"
+        # field - a ~30x difference, and the actual cause of "slow" here, not
+        # a networking or config problem. ChatOllama (native client) exposes
+        # that field directly as reasoning=False; ChatOpenAI has no equivalent.
+        from langchain_ollama import ChatOllama
+        base_url = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+        base_url = base_url.removesuffix("/v1")
+        llm = ChatOllama(
+            model=model_id,
+            temperature=0,
+            reasoning=False,
+            base_url=base_url,
+            keep_alive="30m",
+        )
     elif model_id.startswith("qwen"):
         llm = ChatGroq(model=model_id, reasoning_effort="none", temperature=0)
     elif "gpt-oss" in model_id:

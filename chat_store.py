@@ -485,14 +485,38 @@ def _openrouter_free_models():
         return []
 
 
+def _ollama_models():
+    """Models pulled locally in Ollama."""
+    host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+    try:
+        response = requests.get(f"{host}/api/tags", timeout=1.0)
+        response.raise_for_status()
+        models = []
+        for entry in response.json().get("models", []):
+            name = entry.get("name") or entry.get("model")
+            if name:
+                models.append(name)
+        return sorted(models)
+    except Exception:
+        return []
+
+
 def available_models():
     """Chat models this install can actually call, newest catalog first.
 
     Groq is queried live so the list never goes stale. Google entries appear
     only when GOOGLE_API_KEY is set, since they need a separate free key from
-    AI Studio.
+    AI Studio. Ollama is queried locally if running.
     """
     models = []
+
+    for model_id in _ollama_models():
+        models.append({
+            "id": model_id,
+            "provider": "ollama",
+            "label": _pretty(model_id),
+            "note": "Ollama · local",
+        })
 
     for model_id in (_groq_model_ids() or _FALLBACK_GROQ_MODELS):
         models.append({

@@ -1,0 +1,72 @@
+[theme]
+# Global-only options: this Streamlit build rejects baseFontSize,
+# baseFontWeight and showSidebarBorder under [theme.light]/[theme.dark] -
+# they only take effect here. Everything else that differs between light and
+# dark (color, font family, per-mode radius) is per-mode below.
+baseFontSize = 15
+baseFontWeight = 400
+showSidebarBorder = true
+
+[theme.light]
+primaryColor = "#7C5CFF"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f6f6f9"
+textColor = "#1a1a1f"
+borderColor = "#e2e2ea"
+linkColor = "#7C5CFF"
+codeBackgroundColor = "#f6f6f9"
+blueColor = "#3B82F6"
+greenColor = "#22C55E"
+orangeColor = "#F59E0B"
+redColor = "#EF4444"
+violetColor = "#8B5CF6"
+grayColor = "#6B7280"
+chartCategoricalColors = ["#7C5CFF", "#22C55E", "#F59E0B", "#3B82F6", "#EF4444", "#8B5CF6", "#6B7280"]
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@500;600&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+headingFontSizes = ["30px", "22px", "18px", "16px", "14px", "13px"]
+headingFontWeights = [600, 600, 600, 500, 500, 500]
+linkUnderline = false
+baseRadius = "10px"
+buttonRadius = "10px"
+showWidgetBorder = true
+
+[theme.dark]
+primaryColor = "#8C7BFF"
+backgroundColor = "#0b0b0f"
+secondaryBackgroundColor = "#16161d"
+textColor = "#e8e8ec"
+borderColor = "#26262f"
+linkColor = "#8C7BFF"
+codeBackgroundColor = "#16161d"
+blueColor = "#60A5FA"
+greenColor = "#4ADE80"
+orangeColor = "#FBBF24"
+redColor = "#F87171"
+violetColor = "#A78BFA"
+grayColor = "#9CA3AF"
+chartCategoricalColors = ["#8C7BFF", "#4ADE80", "#FBBF24", "#60A5FA", "#F87171", "#A78BFA", "#9CA3AF"]
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@500;600&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+headingFontSizes = ["30px", "22px", "18px", "16px", "14px", "13px"]
+headingFontWeights = [600, 600, 600, 500, 500, 500]
+linkUnderline = false
+baseRadius = "10px"
+buttonRadius = "10px"
+showWidgetBorder = true
+
+[theme.light.sidebar]
+backgroundColor = "#f7f7fb"
+secondaryBackgroundColor = "#eeeef4"
+borderColor = "#e2e2ea"
+textColor = "#1a1a1f"
+primaryColor = "#7C5CFF"
+
+[theme.dark.sidebar]
+backgroundColor = "#0e0e13"
+secondaryBackgroundColor = "#17171f"
+borderColor = "#26262f"
+textColor = "#e8e8ec"
+primaryColor = "#8C7BFF"

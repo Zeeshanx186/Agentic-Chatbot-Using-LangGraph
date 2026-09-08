@@ -46,87 +46,299 @@ st.set_page_config(
 # and radii all come from .streamlit/config.toml.
 st.html("""
 <style>
-    /* Tight, ChatGPT-style conversation list. */
-    [class*="st-key-chatlist"] {
-        gap: 2px;
+    /* ==========================================================================
+       Nuclear Streamlit Sidebar Styles
+       ========================================================================== */
+    [data-testid="stSidebar"] {
+        background-color: #111114 !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
     }
-    [class*="st-key-chatrow_"] {
-        border-radius: 8px;
-        padding-right: 2px;
+
+    /* 1. Main Viewport Flex Column: Enforce 100vh full height */
+    [data-testid="stSidebarContent"],
+    [data-testid="stSidebarUserContent"],
+    [data-testid="stSidebar"] > div:first-child {
+        display: flex !important;
+        flex-direction: column !important;
+        height: 100vh !important;
+        max-height: 100vh !important;
+        padding: 0.75rem 0.6rem !important;
+        box-sizing: border-box !important;
+        overflow: hidden !important;
+    }
+
+    /* 2. Intermediate Streamlit block wrappers must stretch 100% height */
+    [data-testid="stSidebarContent"] > [data-testid="stVerticalBlock"],
+    [data-testid="stSidebarUserContent"] > [data-testid="stVerticalBlock"],
+    [data-testid="stSidebarContent"] > div > [data-testid="stVerticalBlock"],
+    [data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlock"],
+    [data-testid="stSidebarContent"] [data-testid="stVerticalBlockBorderWrapper"],
+    [data-testid="stSidebarUserContent"] [data-testid="stVerticalBlockBorderWrapper"] {
+        display: flex !important;
+        flex-direction: column !important;
+        flex: 1 1 100% !important;
+        height: 100% !important;
+        min-height: 0 !important;
+        gap: 0 !important;
+    }
+
+    /* 3. Nuke the Sidebar Gaps (The Chat History Fix) */
+    [data-testid="stSidebarUserContent"] [data-testid="stVerticalBlock"],
+    [data-testid="stSidebarContent"] [data-testid="stVerticalBlock"] {
+        gap: 0rem !important;
+    }
+    [data-testid="stSidebarUserContent"] [data-testid="element-container"],
+    [data-testid="stSidebarUserContent"] [data-testid="stElementContainer"],
+    [data-testid="stSidebarContent"] [data-testid="element-container"],
+    [data-testid="stSidebarContent"] [data-testid="stElementContainer"] {
+        margin: 0px !important;
+        padding: 0px !important;
+        gap: 0px !important;
+    }
+
+    /* 4. Flatten and Compact the Chat Buttons */
+    [data-testid="stSidebarUserContent"] .stButton > button,
+    [data-testid="stSidebarContent"] .stButton > button {
+        border: none !important;
+        background-color: transparent !important;
+        box-shadow: none !important;
+        padding: 6px 12px !important;
+        height: auto !important;
+        min-height: 32px !important;
+        text-align: left !important;
+        justify-content: flex-start !important;
+        width: 100% !important;
+        border-radius: 6px !important;
+        color: #b4b4b4 !important;
+        font-size: 0.85rem !important;
+        font-weight: 400 !important;
+        transition: background-color 0.12s ease, color 0.12s ease !important;
+    }
+    [data-testid="stSidebarUserContent"] .stButton > button:hover,
+    [data-testid="stSidebarContent"] .stButton > button:hover {
+        background-color: #2b2b33 !important; /* Subtle hover state */
+        color: #ffffff !important;
+    }
+
+    /* Active Chat Highlight */
+    [class*="st-key-chatrow_active_"] .stButton > button {
+        background-color: rgba(255, 255, 255, 0.12) !important;
+        color: #ffffff !important;
+        font-weight: 500 !important;
+    }
+
+    /* 5. Text Truncation for Long Chat Titles */
+    [data-testid="stSidebarUserContent"] .stButton > button p,
+    [data-testid="stSidebarContent"] .stButton > button p {
+        overflow: hidden !important;
+        white-space: nowrap !important;
+        text-overflow: ellipsis !important;
+        margin: 0 !important;
+        width: 100% !important;
+        text-align: left !important;
+    }
+    [data-testid="stSidebarUserContent"] .stButton > button div,
+    [data-testid="stSidebarContent"] .stButton > button div,
+    [data-testid="stSidebarUserContent"] .stButton > button [data-testid="stMarkdownContainer"],
+    [data-testid="stSidebarContent"] .stButton > button [data-testid="stMarkdownContainer"] {
+        width: 100% !important;
+        min-width: 0 !important;
+        justify-content: flex-start !important;
+        text-align: left !important;
+    }
+
+    /* Compact chat row wrapper */
+    [class*="st-key-chatrow_"],
+    [class*="st-key-chatrow_active_"] {
+        border-radius: 6px !important;
+        padding-right: 2px !important;
+        margin-bottom: 2px !important;
+        min-height: 32px !important;
+        height: 32px !important;
+        align-items: center !important;
+        transition: background-color 0.12s ease !important;
     }
     [class*="st-key-chatrow_"]:hover {
-        background: color-mix(in srgb, currentColor 8%, transparent);
+        background: rgba(255, 255, 255, 0.04) !important;
     }
     [class*="st-key-chatrow_active_"] {
-        background: color-mix(in srgb, currentColor 12%, transparent);
+        background: rgba(255, 255, 255, 0.08) !important;
     }
-    [class*="st-key-chatrow_"] .stButton > button {
-        background: transparent;
-        border: none;
-        box-shadow: none;
-        border-radius: 8px;
-        font-weight: 400;
-        min-height: 34px;
-        padding: 4px 10px;
+
+    /* Popover menu icon in row */
+    [class*="st-key-chatrow_"] .stPopover button,
+    [class*="st-key-chatrow_active_"] .stPopover button {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        min-height: 28px !important;
+        height: 28px !important;
+        padding: 0 4px !important;
+        color: #71717a !important;
     }
-    /* The button's inner flex wrapper centres its label; force it left and let
-       the markdown span take the full width so the ellipsis has room. */
-    [class*="st-key-chatrow_"] .stButton > button > div,
-    [class*="st-key-chatrow_"] .stButton > button > div > span {
-        justify-content: flex-start;
-        flex: 1 1 auto;
-        min-width: 0;
-        width: 100%;
-    }
-    [class*="st-key-chatrow_"] .stButton > button [data-testid="stMarkdownContainer"] {
-        width: 100%;
-        min-width: 0;
-    }
-    [class*="st-key-chatrow_"] .stButton > button p {
-        overflow: hidden;
-        white-space: nowrap;
-        text-overflow: ellipsis;
-        text-align: left;
-        margin: 0;
-    }
-    [class*="st-key-chatrow_active_"] .stButton > button p:first-of-type {
-        font-weight: 500;
-    }
-    /* Second line of a row is the first message. Dimmed and smaller so the
-       title still leads, but present - it is what tells two "Image Content
-       Inquiry" threads apart. */
-    [class*="st-key-chatrow_"] .stButton > button p:nth-of-type(2) {
-        font-size: 0.78em;
-        opacity: 0.55;
-        font-weight: 400;
-        margin-top: 1px;
-    }
-    /* Row menu stays out of the way until the row is hovered or active. */
-    [class*="st-key-chatrow_"] .stPopover button {
-        background: transparent;
-        border: none;
-        box-shadow: none;
-        min-height: 28px;
-        padding: 2px 6px;
+    [class*="st-key-chatrow_"] .stPopover button:hover,
+    [class*="st-key-chatrow_active_"] .stPopover button:hover {
+        color: #ffffff !important;
     }
     [class*="st-key-chatrow_"] .stPopover {
-        opacity: 0;
-        transition: opacity 0.15s ease;
+        opacity: 0 !important;
+        transition: opacity 0.15s ease !important;
     }
     [class*="st-key-chatrow_"]:hover .stPopover,
     [class*="st-key-chatrow_active_"] .stPopover {
-        opacity: 1;
+        opacity: 1 !important;
     }
-    /* New chat reads as a list row, not a loud CTA. */
-    [class*="st-key-newchat"] button {
-        justify-content: flex-start;
-        border-radius: 10px;
-        min-height: 40px;
+
+    /* Top Action: New chat button override */
+    [class*="st-key-newchat"] {
+        flex-shrink: 0 !important;
+        margin-bottom: 4px !important;
     }
-    [class*="st-key-newchat"] button > div {
-        justify-content: flex-start;
-        width: 100%;
+    [class*="st-key-newchat"] .stButton > button {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        border-radius: 8px !important;
+        min-height: 38px !important;
+        height: 38px !important;
+        background: rgba(255, 255, 255, 0.07) !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        color: #f0f0f0 !important;
+        font-weight: 500 !important;
+        font-size: 0.88em !important;
+        padding: 0 12px !important;
+        gap: 10px !important;
+        width: 100% !important;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15) !important;
+        transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1) !important;
     }
+    [class*="st-key-newchat"] .stButton > button:hover {
+        background: rgba(255, 255, 255, 0.13) !important;
+        border-color: rgba(255, 255, 255, 0.2) !important;
+        color: #ffffff !important;
+        transform: translateY(-1px);
+        box-shadow: 0 3px 8px rgba(0, 0, 0, 0.25) !important;
+    }
+    [class*="st-key-newchat"] .stButton > button:active {
+        transform: translateY(0);
+    }
+    [class*="st-key-newchat"] .stButton > button [data-testid="stIconMaterial"] {
+        font-size: 18px !important;
+        color: #d1d5db !important;
+    }
+
+    /* Search chats input */
+    [data-testid="stSidebar"] [data-testid="stTextInput"] {
+        margin-top: 0.2rem !important;
+        margin-bottom: 0.2rem !important;
+        flex-shrink: 0 !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stTextInput"] > div > div {
+        background-color: rgba(255, 255, 255, 0.04) !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        border-radius: 8px !important;
+        transition: all 0.15s ease !important;
+        min-height: 36px !important;
+        height: 36px !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stTextInput"] input {
+        color: #e5e7eb !important;
+        font-size: 0.85rem !important;
+        padding-left: 0.5rem !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stTextInput"] input::placeholder {
+        color: #71717a !important;
+        font-size: 0.85rem !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stTextInput"] > div > div:focus-within {
+        border-color: rgba(140, 123, 255, 0.7) !important;
+        background-color: rgba(255, 255, 255, 0.07) !important;
+        box-shadow: 0 0 0 2px rgba(140, 123, 255, 0.15) !important;
+    }
+    [data-testid="stSidebar"] [data-testid="stTextInput"] [data-testid="stIconMaterial"] {
+        color: #71717a !important;
+        font-size: 18px !important;
+    }
+
+    /* Middle Independently Scrollable Section */
+    [class*="st-key-sidebar_recents_scroll"] {
+        flex: 1 1 auto !important;
+        height: 100% !important;
+        min-height: 0 !important;
+        overflow-y: auto !important;
+        overflow-x: hidden !important;
+        margin: 0.25rem 0 !important;
+        padding-right: 4px !important;
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 0 !important;
+    }
+
+    /* Slim custom scrollbar */
+    [class*="st-key-sidebar_recents_scroll"]::-webkit-scrollbar {
+        width: 5px !important;
+    }
+    [class*="st-key-sidebar_recents_scroll"]::-webkit-scrollbar-track {
+        background: transparent !important;
+    }
+    [class*="st-key-sidebar_recents_scroll"]::-webkit-scrollbar-thumb {
+        background: rgba(255, 255, 255, 0.15) !important;
+        border-radius: 9999px !important;
+    }
+    [class*="st-key-sidebar_recents_scroll"]::-webkit-scrollbar-thumb:hover {
+        background: rgba(255, 255, 255, 0.28) !important;
+    }
+
+    /* Bottom Anchored Footer ("Agent tools") */
+    [class*="st-key-sidebar_footer"] {
+        margin-top: auto !important;
+        flex-shrink: 0 !important;
+        width: 100% !important;
+        padding-top: 0.5rem !important;
+        border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+    }
+    [class*="st-key-sidebar_footer"] [data-testid="stPopoverButton"] button,
+    [class*="st-key-sidebar_footer"] .stButton > button {
+        display: flex !important;
+        align-items: center !important;
+        justify-content: flex-start !important;
+        width: 100% !important;
+        height: 38px !important;
+        min-height: 38px !important;
+        border-radius: 8px !important;
+        background: rgba(255, 255, 255, 0.04) !important;
+        border: 1px solid rgba(255, 255, 255, 0.08) !important;
+        color: #d1d5db !important;
+        font-size: 0.86rem !important;
+        font-weight: 500 !important;
+        padding: 0 12px !important;
+        gap: 10px !important;
+        transition: all 0.15s ease !important;
+    }
+    [class*="st-key-sidebar_footer"] [data-testid="stPopoverButton"] button:hover,
+    [class*="st-key-sidebar_footer"] .stButton > button:hover {
+        background: rgba(255, 255, 255, 0.09) !important;
+        border-color: rgba(255, 255, 255, 0.16) !important;
+        color: #ffffff !important;
+    }
+    [class*="st-key-sidebar_footer"] [data-testid="stIconMaterial"] {
+        font-size: 18px !important;
+        color: #9ca3af !important;
+    }
+    [class*="st-key-sidebar_footer"] [data-testid="stPopoverButton"] div[aria-hidden="true"] {
+        display: none !important;
+    }
+
+    /* Responsive mobile drawer */
+    @media (max-width: 768px) {
+        [data-testid="stSidebarContent"],
+        [data-testid="stSidebarUserContent"],
+        [data-testid="stSidebar"] > div:first-child {
+            height: calc(100vh - 3.5rem) !important;
+            padding: 0.75rem 0.5rem !important;
+        }
+    }
+
     /* ---------- Model picker: chip in the composer, list in the dropdown ----------
        Streamlit exposes no theme CSS variables at runtime, so every colour here
        is a color-mix on currentColor: it resolves correctly in both themes,
@@ -156,6 +368,7 @@ st.html("""
         background: color-mix(in srgb, currentColor 7%, transparent);
         border: 1px solid color-mix(in srgb, currentColor 16%, transparent);
         box-shadow: none;
+        transition: background-color 0.15s ease, border-color 0.15s ease;
     }
     [class*="st-key-modelpicker_container"] [data-testid="stPopoverButton"]:hover {
         background: color-mix(in srgb, currentColor 13%, transparent);
@@ -225,6 +438,7 @@ st.html("""
         border-radius: 6px;
         font-weight: 400;
         gap: 8px;
+        transition: background-color 0.12s ease;
     }
     [class*="st-key-pickmodel_"] button:hover {
         background: color-mix(in srgb, currentColor 9%, transparent);
@@ -264,6 +478,149 @@ st.html("""
     /* Keep typed text clear of the chip: 46px inset + 140px chip cap + 12px. */
     [data-testid="stChatInput"] textarea {
         padding-left: 152px !important;
+    }
+
+    /* ---------- Visual polish ---------- */
+
+    html {
+        scroll-behavior: smooth;
+    }
+
+    /* Inter Bold at Streamlit's default 44px h1 size renders chunky and
+       fringed under Chromium's anti-aliasing - too heavy for a product
+       header. Smaller, lighter, tighter tracking reads calmer. Sizes/weights
+       are set via headingFontSizes/headingFontWeights in config.toml; this
+       covers what config.toml can't (smoothing, tracking). */
+    h1, h2, h3, h4, h5, h6 {
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        text-rendering: optimizeLegibility;
+        letter-spacing: -0.01em;
+    }
+
+    /* Chat bubbles: config.toml can't shape spacing/shadow, only color. */
+    [data-testid="stChatMessage"] {
+        border-radius: 14px;
+        padding: 4px 6px;
+        animation: msg-in 0.22s ease-out;
+    }
+    @keyframes msg-in {
+        from { opacity: 0; transform: translateY(6px); }
+        to   { opacity: 1; transform: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        [data-testid="stChatMessage"] { animation: none; }
+    }
+
+    /* Empty-state hero: vertically and horizontally center "How can I help?"
+       and suggestion pills in the viewport. */
+    [class*="st-key-emptystate"] {
+        max-width: 680px;
+        margin: 18vh auto 0 auto;
+        padding-bottom: 24px;
+        text-align: center;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+    }
+    [class*="st-key-emptystate"] [data-testid="stElementContainer"] {
+        display: flex;
+        justify-content: center;
+        width: 100%;
+    }
+    [class*="st-key-emptystate"] [data-testid="stHeadingContainer"],
+    [class*="st-key-emptystate"] [data-testid="stCaptionContainer"],
+    [class*="st-key-emptystate"] [data-testid="stMarkdownContainer"] {
+        text-align: center !important;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        width: 100%;
+    }
+    [class*="st-key-emptystate"] [data-testid="stButtonGroup"] {
+        display: flex;
+        justify-content: center;
+        flex-wrap: wrap;
+        width: 100%;
+    }
+
+    /* Composer: soft elevation and a hairline top border instead of the flat
+       default, so it reads as a distinct bar rather than part of the scroll. */
+    [data-testid="stChatInput"] {
+        border-radius: 16px;
+        box-shadow: 0 -2px 16px color-mix(in srgb, currentColor 6%, transparent);
+        transition: box-shadow 0.15s ease, border-color 0.15s ease;
+    }
+    [data-testid="stChatInput"]:focus-within {
+        box-shadow: 0 -2px 20px color-mix(in srgb, currentColor 10%, transparent);
+    }
+
+    /* Suggestion pills on the empty state get a lift on hover instead of the
+       default flat swap. st.pills is a themed stButtonGroup under the hood. */
+    [data-testid="stButtonGroup"] button {
+        transition: transform 0.12s ease, background-color 0.12s ease;
+    }
+    [data-testid="stButtonGroup"] button:hover {
+        transform: translateY(-1px);
+    }
+
+    /* App-wide themed scrollbar (the model popover already had its own). */
+    ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: color-mix(in srgb, currentColor 18%, transparent);
+        border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: color-mix(in srgb, currentColor 28%, transparent);
+    }
+
+    /* Keyboard focus should be visible; Streamlit's default outline is easy to
+       lose against custom backgrounds. Streamlit exposes no theme CSS
+       variable to reach for here (see the note above), so this uses the same
+       currentColor trick as the rest of the file. */
+    button:focus-visible,
+    [data-testid="stChatInput"] textarea:focus-visible,
+    input:focus-visible {
+        outline: 2px solid color-mix(in srgb, currentColor 55%, transparent);
+        outline-offset: 2px;
+    }
+
+    /* Running tool/status icon gets a subtle pulse on top of its own spin -
+       st.status is a themed stExpander under the hood, and
+       stExpanderIconSpinner only renders for the running state (it's swapped
+       for stExpanderIconCheck on completion), so this only fires while work
+       is actually in progress. */
+    [data-testid="stExpanderIconSpinner"] {
+        animation: status-pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes status-pulse {
+        0%, 100% { opacity: 1; }
+        50%      { opacity: 0.5; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        [data-testid="stExpanderIconSpinner"] {
+            animation: none;
+        }
+    }
+
+    /* Narrow viewports: the model chip's fixed desktop offsets (46px left
+       inset, 140px width cap) overlap the composer placeholder text and can
+       clip against the attachment button once the column shrinks below the
+       chat's own tablet breakpoint. */
+    @media (max-width: 640px) {
+        [class*="st-key-modelpicker_container"] {
+            margin-left: 40px;
+        }
+        [class*="st-key-modelpicker_container"] [data-testid="stPopoverButton"] {
+            max-width: 96px;
+        }
+        [data-testid="stChatInput"] textarea {
+            padding-left: 108px !important;
+        }
     }
 </style>
 """)
@@ -667,20 +1024,8 @@ BUCKET_ORDER = ("Today", "Yesterday", "Previous 7 days", "Previous 30 days", "Ol
 
 
 def row_label(thread_id):
-    """Title plus a dimmed line of the first message.
-
-    Two paragraphs in one button label rather than a button beside a caption:
-    it keeps the whole row clickable including the preview, and measured 40px
-    against 59px for the split version.
-    """
-    title = chat_title(thread_id)
-    preview = (st.session_state.get("summaries", {})
-               .get(thread_id, {})
-               .get("preview", ""))
-    # A preview that merely repeats the title is noise taking a line.
-    if not preview or preview.strip().lower() == title.strip().lower():
-        return title
-    return "%s\n\n%s" % (title, preview)
+    """Single-line title matching ChatGPT sidebar style."""
+    return chat_title(thread_id)
 
 
 # One Material Symbol per provider. Deliberately not the real OpenAI/Anthropic/
@@ -691,6 +1036,7 @@ PROVIDER_ICONS = {
     "google": ":material/auto_awesome:",
     "openrouter": ":material/hub:",
     "openai": ":material/blur_on:",
+    "ollama": ":material/terminal:",
 }
 PROVIDER_FALLBACK_ICON = ":material/smart_toy:"
 
@@ -746,6 +1092,7 @@ def render_model_picker():
 
 def render_sidebar():
     with st.sidebar:
+        # New chat button
         if st.button("New chat", key="newchat", type="secondary",
                      icon=":material/edit_square:", width="stretch"):
             start_new_chat()
@@ -759,85 +1106,72 @@ def render_sidebar():
 
         matching = [t for t in st.session_state.threads if matches_search(t, search_query)]
 
-        if not matching:
-            st.caption("No chats match that search." if search_query else "No chats yet.")
-
-        # A search is already a filter, so show every hit; otherwise keep the list
-        # short until the user asks for more.
         show_all = bool(search_query) or st.session_state.get("show_all_chats", False)
         visible_threads = matching if show_all else matching[:CHATS_BEFORE_FOLD]
 
-        chat_list = st.container(key="chatlist", gap=None)
+        # Middle scrollable container for conversation history
+        with st.container(key="sidebar_recents_scroll"):
+            st.markdown("<div style='color: #888; font-size: 11px; font-weight: 600; letter-spacing: 1px; margin-top: 15px; margin-bottom: 5px; padding-left: 12px;'>RECENTS</div>", unsafe_allow_html=True)
 
-        summaries = st.session_state.get("summaries", {})
-        current_bucket = None
+            if not matching:
+                st.caption("No chats match that search." if search_query else "No chats yet.")
 
-        for thread_id in visible_threads:
-            # visible_threads is already newest-first, so buckets come out in
-            # order and a heading is needed only when the bucket changes.
-            #
-            # A thread missing from summaries has no checkpoint yet - it is the
-            # empty chat just opened, not an ancient one. Falling through to
-            # date_bucket's None case filed it under Older and printed that
-            # heading above Today.
-            summary = summaries.get(thread_id)
-            bucket = "Today" if summary is None else date_bucket(summary.get("updated"))
-            if bucket != current_bucket:
-                chat_list.caption(bucket)
-                current_bucket = bucket
+            for thread_id in visible_threads:
+                is_active = thread_id == st.session_state.thread_id
+                row_key = ("chatrow_active_" if is_active else "chatrow_") + thread_id
 
-            is_active = thread_id == st.session_state.thread_id
-            row_key = ("chatrow_active_" if is_active else "chatrow_") + thread_id
-
-            with chat_list.container(key=row_key, horizontal=True, gap=None,
-                                     vertical_alignment="center"):
-                if st.button(row_label(thread_id), key="open_" + thread_id, width="stretch"):
-                    st.session_state.thread_id = thread_id
-                    st.rerun(scope="app")
-
-                with st.popover("", icon=":material/more_horiz:", key="menu_" + thread_id):
-                    new_name = st.text_input(
-                        "Rename chat",
-                        value=chat_title(thread_id),
-                        key="rename_" + thread_id,
-                    )
-                    if st.button("Save", key="save_" + thread_id,
-                                 icon=":material/check:", width="stretch"):
-                        st.session_state.titles[thread_id] = new_name.strip() or "New chat"
-                        chat_store.save_title(thread_id, st.session_state.titles[thread_id])
-                        st.rerun()
-
-                    if st.button("Delete chat", key="del_" + thread_id,
-                                 icon=":material/delete:", width="stretch"):
-                        chat_store.delete_thread(thread_id)
-                        st.session_state.threads = [
-                            t for t in st.session_state.threads if t != thread_id
-                        ]
-                        st.session_state.histories.pop(thread_id, None)
-                        st.session_state.titles.pop(thread_id, None)
-                        if is_active:
-                            start_new_chat(rerun=False)
+                with st.container(key=row_key, horizontal=True, gap=None,
+                                  vertical_alignment="center"):
+                    if st.button(row_label(thread_id), key="open_" + thread_id, width="stretch"):
+                        st.session_state.thread_id = thread_id
                         st.rerun(scope="app")
 
-        hidden_count = len(matching) - len(visible_threads)
-        if not search_query and (hidden_count > 0 or st.session_state.get("show_all_chats")):
-            if hidden_count > 0:
-                if st.button("See more (%d)" % hidden_count, key="seemore",
-                             icon=":material/expand_more:", type="tertiary", width="stretch"):
-                    st.session_state.show_all_chats = True
+                    with st.popover("", icon=":material/more_horiz:", key="menu_" + thread_id):
+                        new_name = st.text_input(
+                            "Rename chat",
+                            value=chat_title(thread_id),
+                            key="rename_" + thread_id,
+                        )
+                        if st.button("Save", key="save_" + thread_id,
+                                     icon=":material/check:", width="stretch"):
+                            st.session_state.titles[thread_id] = new_name.strip() or "New chat"
+                            chat_store.save_title(thread_id, st.session_state.titles[thread_id])
+                            st.toast("Chat renamed", icon=":material/check:")
+                            st.rerun()
+
+                        if st.button("Delete chat", key="del_" + thread_id,
+                                     icon=":material/delete:", width="stretch"):
+                            chat_store.delete_thread(thread_id)
+                            st.session_state.threads = [
+                                t for t in st.session_state.threads if t != thread_id
+                            ]
+                            st.session_state.histories.pop(thread_id, None)
+                            st.session_state.titles.pop(thread_id, None)
+                            if is_active:
+                                start_new_chat(rerun=False)
+                            st.toast("Chat deleted", icon=":material/delete:")
+                            st.rerun(scope="app")
+
+            hidden_count = len(matching) - len(visible_threads)
+            if not search_query and (hidden_count > 0 or st.session_state.get("show_all_chats")):
+                if hidden_count > 0:
+                    if st.button("See more (%d)" % hidden_count, key="seemore",
+                                 icon=":material/expand_more:", type="tertiary", width="stretch"):
+                        st.session_state.show_all_chats = True
+                        st.rerun()
+                elif st.button("Show less", key="seeless", icon=":material/expand_less:",
+                               type="tertiary", width="stretch"):
+                    st.session_state.show_all_chats = False
                     st.rerun()
-            elif st.button("Show less", key="seeless", icon=":material/expand_less:",
-                           type="tertiary", width="stretch"):
-                st.session_state.show_all_chats = False
-                st.rerun()
 
-        st.space("small")
-
-        with st.expander("Agent tools", icon=":material/build:"):
-            for tool in tools:
-                tool_name = getattr(tool, "name", str(tool))
-                _, _, icon = tool_meta(tool_name)
-                st.badge(tool_name, icon=icon, color="gray")
+        # Bottom anchored footer for Agent Tools
+        with st.container(key="sidebar_footer"):
+            with st.popover("Agent tools", icon=":material/build:", width="stretch", key="nav_tools"):
+                st.markdown("**Active agent capabilities**")
+                for tool in tools:
+                    tool_name = getattr(tool, "name", str(tool))
+                    _, _, icon = tool_meta(tool_name)
+                    st.badge(tool_name, icon=icon, color="gray")
 
 
 render_sidebar()
@@ -850,28 +1184,27 @@ thread_key = st.session_state.thread_id
 suggested_prompt = None
 
 with st.container(horizontal=True, vertical_alignment="center"):
-    st.title("Agentic chatbot", width="stretch")
+    st.title(":material/smart_toy: Agentic chatbot", width="stretch")
     st.badge(st.session_state.model_id, icon=":material/bolt:", color="primary")
 
 if not messages:
-    with st.container(horizontal_alignment="center"):
-        st.markdown("# :material/smart_toy:")
+    with st.container(key="emptystate", horizontal_alignment="center"):
         st.title("How can I help?", text_alignment="center")
         st.caption(
             "Search the web, crunch numbers, read your PDFs, and check markets and weather.",
             text_alignment="center",
         )
-    st.space("small")
-    picked = st.pills(
-        "Try asking",
-        list(SUGGESTIONS.keys()),
-        label_visibility="collapsed",
-        key="suggestions_" + st.session_state.thread_id,
-    )
-    if picked:
-        # Handled in this same run rather than via a rerun: the pills keep their
-        # selection across reruns, so re-queueing would loop forever.
-        suggested_prompt = SUGGESTIONS[picked]
+        st.space("small")
+        picked = st.pills(
+            "Try asking",
+            list(SUGGESTIONS.keys()),
+            label_visibility="collapsed",
+            key="suggestions_" + st.session_state.thread_id,
+        )
+        if picked:
+            # Handled in this same run rather than via a rerun: the pills keep their
+            # selection across reruns, so re-queueing would loop forever.
+            suggested_prompt = SUGGESTIONS[picked]
 
 # Group consecutive messages from the same role into a single bubble.
 groups = []

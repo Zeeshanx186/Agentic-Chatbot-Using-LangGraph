@@ -224,3 +224,6 @@ agentic_chatbot.db
 agentic_chatbot.db-shm
 agentic_chatbot.db-wal
 chat_titles.json
+faiss_db/
+uploads/
+extracts/

@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "agentic-chatbot",
+      "runtimeExecutable": ".venv/Scripts/streamlit.exe",
+      "runtimeArgs": ["run", "app.py", "--server.port", "8501", "--server.headless", "true"],
+      "port": 8501
+    },
+    {
+      "name": "agentic-chatbot-chainlit",
+      "runtimeExecutable": ".venv/Scripts/chainlit.exe",
+      "runtimeArgs": ["run", "chainlit_app.py", "--port", "8503", "--headless"],
+      "port": 8503
+    }
+  ]
+}

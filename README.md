@@ -242,7 +242,7 @@ docker system prune
 ```
 
 **Most destructive.** Everything above, plus every image not attached to a
-running container — including this app's image and the `python:3.11-slim-buster`
+running container — including this app's image and the `python:3.11-slim`
 base. Full rebuild from zero afterward:
 
 ```bash
@@ -332,6 +332,9 @@ need a GPU, and containers have no GPU access unless explicitly configured.
 | `requirements.txt`             | Dependencies for the Docker build (pip)                |
 | `Dockerfile`                   | Image definition                                       |
 | `.dockerignore`                | Keeps secrets,`.git`, and local DBs out of the image |
+| `.github/workflows/cicd.yaml`  | CI/CD: lint, build, push, deploy to EC2                |
+| `DEPLOYMENT.md`                | AWS EC2 + GitHub Actions deployment runbook            |
+| `CICD-FROM-SCRATCH.md`         | Step-by-step guide: same pipeline, starting from zero  |
 | `.env`                         | API keys — never committed                            |
 | `agentic_chatbot.db`           | SQLite checkpointer, local chat history                |
 
@@ -354,6 +357,12 @@ need a GPU, and containers have no GPU access unless explicitly configured.
   Google provider option. Selecting a Gemini model will fail until it's added.
 - **`ALPHAVANTAGE_API_KEY` was once hardcoded in the source.** If that ever hit
   git, it's still in the history. Rotating it at AlphaVantage is the only real fix.
-- Base image is `python:3.11-slim-buster` (Debian Buster, end-of-life, no
-  security updates). Fine for a learning project; `python:3.11-slim-bookworm` is
-  the drop-in replacement if this ever goes anywhere real.
+- Base image is `python:3.11-slim` (currently Debian Trixie), which still gets
+  security updates. It was `python:3.11-slim-buster` — Buster is end-of-life.
+- The image installs `build-essential` so packages without a prebuilt wheel can
+  compile, and `libgomp1` for `faiss-cpu`. `build-essential` adds a few hundred MB
+  to the image. A multi-stage build would drop it from the final layer; not worth
+  the complexity here.
+- Streamlit runs with `--server.address=0.0.0.0` (so the port publish actually
+  reaches it), `--server.headless=true` (no browser-open attempt, no email prompt
+  on first run) and `--browser.gatherUsageStats=false`.

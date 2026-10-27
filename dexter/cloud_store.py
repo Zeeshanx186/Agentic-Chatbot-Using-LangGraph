@@ -10,7 +10,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 ENABLED = bool(os.environ.get("DATABASE_URL"))
-DATA_ROOT = Path(tempfile.gettempdir()) / "dexter" if ENABLED else Path(__file__).parent
+# Local files live beside the repo (or /app in Docker), not inside the package.
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_ROOT = Path(tempfile.gettempdir()) / "dexter" if ENABLED else _PROJECT_ROOT
 
 
 @lru_cache(maxsize=1)

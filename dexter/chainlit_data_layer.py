@@ -24,7 +24,7 @@ from chainlit.types import (
 )
 from chainlit.user import PersistedUser, User
 
-import chat_store
+from dexter import chat_store
 
 # A single pseudo-user for this app (no auth).
 _FIXED_USER_ID = "default"

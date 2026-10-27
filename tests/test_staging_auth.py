@@ -16,7 +16,8 @@ def auth_callbacks(password):
             return fn
         return decorator
 
-    source = ast.parse(Path('chainlit_app.py').read_text(encoding='utf-8'))
+    app_path = Path(__file__).resolve().parents[1] / "dexter" / "chainlit_app.py"
+    source = ast.parse(app_path.read_text(encoding="utf-8"))
     block = next(node for node in source.body if isinstance(node, ast.If)
                  and 'DEXTER_STAGING_PASSWORD' in ast.unparse(node.test))
     module = ast.Module(body=[block], type_ignores=[])

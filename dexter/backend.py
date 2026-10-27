@@ -7,11 +7,18 @@ import json
 import re
 import uuid
 import requests
-import cloud_store
+from dexter import cloud_store
 import socket
 import urllib.parse
 from zoneinfo import ZoneInfo
 from typing import Annotated, TypedDict, Literal
+import sys
+from pathlib import Path
+
+# Keep `import dexter` working when this file is loaded outside the repo root.
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 # Third-party utilities
 from pydantic import BaseModel, Field
@@ -42,7 +49,7 @@ from langgraph.graph.message import add_messages
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt, Command
-from google_tools import GOOGLE_TOOLS
+from dexter.google_tools import GOOGLE_TOOLS
 
 
 load_dotenv()
@@ -891,7 +898,7 @@ def get_ocr_engine():
     """Build the OCR engine once per process and keep it.
 
     rapidocr is imported inside the function, not at module scope, for the same
-    reason the embeddings are: the Streamlit frontend imports this module before
+    reason the embeddings are: the UI imports this module before
     it can draw anything, and onnxruntime costs ~1.4s to import. A text-only
     conversation should never pay that.
     """
@@ -1079,7 +1086,7 @@ def remember(fact: str, tag: str = "") -> str:
 
     Args:
         fact: a single self-contained sentence, e.g. "Zeeshan is building an
-              agentic chatbot with LangGraph and Streamlit".
+              agentic chatbot with LangGraph and Chainlit".
         tag: optional one-word category such as "preference" or "work".
     """
     fact = (fact or "").strip()
@@ -1341,145 +1348,6 @@ def cursor_coding_agent(task_description: str, github_repo: str = "") -> str:
     return "\n".join(lines)
 
 
-
-
-
-    Supports .txt .md .csv .json .pdf .docx and images (.png/.jpg/.jpeg/.webp/.gif/.bmp/.tiff)
-    via the same RapidOCR path as extract_text_from_image. Returns empty string on failure.
-    Does not touch the RAG index.
-    """
-    path = file_path
-    name = display_name or os.path.basename(path)
-    ext = os.path.splitext(name)[1].lower()
-    image_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif"}
-    try:
-        if ext in {".txt", ".md", ".csv"}:
-            with open(path, "rb") as f:
-                raw = f.read()
-            for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
-                try:
-                    return raw.decode(enc)
-                except UnicodeDecodeError:
-                    continue
-            return raw.decode("utf-8", errors="replace")
-        if ext == ".json":
-            with open(path, "r", encoding="utf-8", errors="replace") as f:
-                text = f.read()
-            try:
-                import json as _json
-                return _json.dumps(_json.loads(text), indent=2, ensure_ascii=False)
-            except Exception:
-                return text
-        if ext == ".pdf":
-            from pypdf import PdfReader
-            reader = PdfReader(path)
-            parts = []
-            for page in reader.pages:
-                t = page.extract_text() or ""
-                if t.strip():
-                    parts.append(t)
-            return "\n\n".join(parts)
-        if ext == ".docx":
-            try:
-                from docx import Document
-            except ImportError:
-                return ""
-            doc = Document(path)
-            return "\n".join(p.text for p in doc.paragraphs if p.text)
-        if ext in image_exts:
-            ocr_path = path
-            cleanup = None
-            if ext not in {".png", ".jpg", ".jpeg"}:
-                try:
-                    from PIL import Image
-                    import tempfile
-                    img = Image.open(path)
-                    if getattr(img, "n_frames", 1) > 1:
-                        img.seek(0)
-                    if img.mode not in ("RGB", "L"):
-                        img = img.convert("RGB")
-                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
-                    tmp.close()
-                    img.save(tmp.name, format="PNG")
-                    ocr_path = tmp.name
-                    cleanup = tmp.name
-                except Exception:
-                    ocr_path = path
-            try:
-                result = get_ocr_engine()(ocr_path)
-            finally:
-                if cleanup:
-                    try:
-                        os.unlink(cleanup)
-                    except OSError:
-                        pass
-            lines = _rows_from_boxes(result.boxes, result.txts or ())
-            lines = _strip_line_numbers(lines)
-            return "\n".join(lines) if lines else ""
-    except Exception:
-        return ""
-    return ""
-
-
-
-@tool
-    """
-
-    local API (default http://127.0.0.1:8787).
-
-    plain text in document_text (and optional comma-separated document_names).
-    The local API folds that text into the workflow query.
-
-    Args:
-        document_text: Optional extracted text from attached files.
-        document_names: Optional comma-separated file names matching document_text
-            sections (or a single name if one blob).
-    """
-    url = base + "/ask"
-    payload = {"query": query}
-    doc_text = (document_text or "").strip()
-    if doc_text:
-        names = [n.strip() for n in (document_names or "").split(",") if n.strip()]
-        if len(names) == 1:
-            docs = [{"name": names[0], "text": doc_text}]
-        elif len(names) > 1:
-            # Multiple names with one blob: use first name; agent should prefer
-            # one combined blob or call once per file when possible.
-            docs = [{"name": names[0], "text": doc_text}]
-        else:
-            docs = [{"name": "attached_document", "text": doc_text}]
-        payload["documents"] = docs
-    try:
-        response = requests.post(
-            url,
-            json=payload,
-        )
-    except requests.exceptions.RequestException as e:
-        return (
-            "Is uvicorn running at %s? Start with: "
-            % (e, base)
-        )
-    if response.status_code >= 400:
-        body = (response.text or "")[:500]
-        return (
-            "Try POST /auth/refresh on the local API, or re-run start.ps1."
-            % (response.status_code, body)
-        )
-
-    try:
-        data = response.json()
-    except ValueError:
-
-    answer = data.get("answer")
-    run_id = data.get("run_id")
-    status = data.get("status")
-    detail = data.get("detail")
-    if answer:
-    return (
-        % (run_id, status, detail or "")
-    ).strip()
-
-
 # web_search, not search_tool: the wrapper is what falls back to DuckDuckGo
 # when Tavily rate-limits. Binding the raw tool left that fallback dead.
 tools = [
@@ -1491,10 +1359,6 @@ tools = [
     cursor_coding_agent,
     *GOOGLE_TOOLS,
 ]
-
-    "1", "true", "yes", "on",
-}
-
 
 DEFAULT_MODEL = "qwen/qwen3.6-27b"
 current_model = DEFAULT_MODEL
@@ -1778,11 +1642,6 @@ _RESEARCH_SYSTEM = (
     "others only as a brief aside. Never hand on a list of candidates. Prefer "
     "dated, primary sources over social posts and undated pages."
 )
-    _RESEARCH_SYSTEM += (
-        "with their question and answer from that result instead of web search. "
-        "If the user attached files for that ask and the message includes extracted "
-        "(and document_names when given). Do not web-search those attachments."
-    )
 Research_Agent = make_agent(
     "Research_Agent",
     _RESEARCH_SYSTEM,
@@ -1910,8 +1769,6 @@ _TASK_WORD_OWNERS = (
         r"\b(multiply|multiplied|divide|divided|calculat|comput|arithmetic|product of"
         r"|sum of|average of|convert|how many\b.{0,40}\b(buy|afford|purchase))",
         re.IGNORECASE)),
-    ("Research_Agent", re.compile(
-        re.IGNORECASE)),
     ("Coding_Agent", re.compile(
         r"\b(cursor_coding_agent|debug|refactor|fix the (bug|code)|open a (pr|pull request)"
         r"|pull request|codebase|github\.com/)\b",
@@ -2009,8 +1866,7 @@ PLANNER_PROMPT = SystemMessage(content=(
     # it instead and a two-image turn was planned as "ask the user to upload the
     # images" - to Memory_Agent, which has no OCR tool.
     "- Research_Agent: web search, fetching URLs, Wikipedia, uploaded RAG PDFs, "
-    "reading text out of attached images and screenshots"
-    + ".\n"
+    "reading text out of attached images and screenshots.\n"
     "- Financial_Agent: stock quotes and history, stock purchases, weather.\n"
     "- Memory_Agent: greetings, general chat, remembering/recalling user facts, date and time.\n"
     "- Coding_Agent: repository coding, debugging, refactors, and opening PRs via "
@@ -2028,8 +1884,8 @@ PLANNER_PROMPT = SystemMessage(content=(
     "5. Name the exact tool the step needs (get_weather, run_pandas_code, "
     "get_stock_price, web_search, wikipedia, extract_text_from_image, "
     "cursor_coding_agent, gmail_search_emails, gmail_read_email, gmail_create_draft, "
-    "gmail_send_email, calendar_list_events, calendar_create_event, calendar_delete_event"
-    + "). Routing follows the tool you name.\n"
+    "gmail_send_email, calendar_list_events, calendar_create_event, calendar_delete_event). "
+    "Routing follows the tool you name.\n"
     # No agent has a calculator in its head. Every number an LLM 'computes' in
     # prose is a guess that happens to look like a digit, and one of them came
     # out 195,600 when the answer was 195,603.

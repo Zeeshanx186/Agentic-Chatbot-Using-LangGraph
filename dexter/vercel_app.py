@@ -7,8 +7,13 @@ import shutil
 import uuid
 
 from dotenv import load_dotenv
+import sys
 
 load_dotenv()
+
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 # Chainlit creates .files and translations under APP_ROOT during import.
 # Its read-only deployment files remain in the bundle; runtime files go to /tmp.
@@ -18,14 +23,14 @@ if os.environ.get("VERCEL"):
             raise RuntimeError(f"Missing required deployment environment variable: {name}")
     runtime = Path("/tmp/dexter/chainlit")
     runtime.mkdir(parents=True, exist_ok=True)
-    source = Path(__file__).parent
+    source = Path(__file__).resolve().parents[1]
     for name in (".chainlit", "public"):
         shutil.copytree(source / name, runtime / name, dirs_exist_ok=True)
     shutil.copy2(source / "chainlit.md", runtime / "chainlit.md")
     os.environ["CHAINLIT_APP_ROOT"] = str(runtime)
     os.environ.setdefault("HF_HOME", "/tmp/dexter/huggingface")
 
-import cloud_store
+from dexter import cloud_store
 from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.responses import Response
 from chainlit.server import UserParam, validate_file_upload

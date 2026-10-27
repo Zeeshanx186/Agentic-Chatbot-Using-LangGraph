@@ -232,11 +232,18 @@ chat_feedback.json
 
 .vercel
 .env*
-
+!.env.example
 credentials.json
 token.json
 
 # private server notes and generated outputs
 docs/oracle-deployment.md
 ai_news.xlsx
+
+# Local AI-assistant config. Not part of the project.
+.claude/
+.cursor/
+.impeccable/
+.codex/
+.agents/
 

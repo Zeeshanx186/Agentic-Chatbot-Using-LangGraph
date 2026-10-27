@@ -37,23 +37,25 @@ Time: about 2 hours the first time, most of it waiting for downloads.
 
 ## Part 0: What this project is
 
-An **agentic chatbot**. A Streamlit web app where you type a question and a team of AI
-agents answers it, using real tools instead of guessing.
-
-The three code files:
+Dexter, a **Chainlit chatbot**. You type a question and a team of LangGraph agents
+answers it, using real tools instead of guessing.
 
 | File | What it holds |
 |---|---|
-| `app.py` | The Streamlit UI — chat window, sidebar of past chats, file upload, the Approve/Decline buttons, streaming the answer as it is written |
-| `backend.py` | The brain. The LangGraph graph, four agents, sixteen tools, model selection |
-| `chat_store.py` | Saving chats, auto-naming them, listing available models |
+| `dexter/chainlit_app.py` | Chainlit UI — chat, file upload, Approve/Decline, streaming |
+| `dexter/backend.py` | LangGraph graph, specialist agents, tools, model selection |
+| `dexter/chat_store.py` | Chat titles, feedback, model catalog |
+| `dexter/google_tools.py` | Gmail and Google Calendar tools |
+| `dexter/cloud_store.py` | Postgres persistence when `DATABASE_URL` is set |
+| `dexter/vercel_app.py` | Vercel ASGI entry |
+| `deploy/Dockerfile` | Image definition. Build context is the repo root |
 
 **How the brain works.** A message goes to a *supervisor*, which writes a plan — a list of
 steps. It sends each step to whichever specialist agent owns the right tool, waits for the
 result, then moves to the next step. If a step fails it replans. When the plan is done a
 *synthesizer* writes the final answer out of everything collected.
 
-The four agents and what they own:
+The specialist agents and what they own:
 
 | Agent | Tools |
 |---|---|
@@ -61,10 +63,11 @@ The four agents and what they own:
 | `Research_Agent` | `web_search`, `fetch_url`, `wikipedia`, `retriever_tool` (searches your uploaded PDFs), `extract_text_from_image` (OCR) |
 | `Financial_Agent` | `get_stock_price`, `get_stock_history`, `purchase_stock`, `get_weather` |
 | `Memory_Agent` | `remember`, `recall`, `forget`, `get_current_datetime` |
+| `Coding_Agent` | `cursor_coding_agent` |
+| `Google_Agent` | Gmail and Calendar tools in `dexter/google_tools.py` |
 
-One tool, `purchase_stock`, deliberately **stops the whole graph and waits for you** —
-that is the Approve / Decline button in the UI. That is called a human-in-the-loop
-interrupt.
+`purchase_stock`, `gmail_send_email`, and `calendar_delete_event` **stop the graph and wait** —
+that is the Approve / Decline prompt in the UI. That is a human-in-the-loop interrupt.
 
 Chat history lives in `agentic_chatbot.db`, a SQLite file. LangGraph calls this a
 checkpointer: every step of every conversation is saved, so a chat can be reopened, and an
@@ -193,10 +196,10 @@ uv sync
 Make a file called `.env` in the project root:
 
 ```
-GROQ_API_KEY=gsk_yourkeyhere
-TAVILY_API_KEY=tvly_yourkeyhere
-OPENWEATHER_API_KEY=yourkeyhere
-ALPHAVANTAGE_API_KEY=yourkeyhere
+GROQ_API_KEY=
+TAVILY_API_KEY=
+OPENWEATHER_API_KEY=
+ALPHAVANTAGE_API_KEY=
 ```
 
 **No spaces around the `=`.** Write `KEY=value`, never `KEY = value`. Locally it makes no
@@ -212,26 +215,16 @@ fix is to go to the provider and rotate the key.
 ### 3.3 Run it
 
 ```bash
-uv run streamlit run app.py
+uv run chainlit run dexter/chainlit_app.py
 ```
 
-**Use `uv run`. Do not type bare `streamlit run app.py`.** On this machine, bare
-`streamlit` and bare `python` resolve to the system Python 3.12 install, not the project's
-`.venv` (Python 3.11). The system install has a different, older set of packages. This has
-already produced two separate phantom bugs that each cost an hour:
+**Use `uv run`.** A bare `chainlit` or `python` on your PATH may be a different install
+than the project's `.venv`, and imports will fail even though the lockfile is fine.
 
-- `ImportError: Could not import ddgs python package` — the package was installed in the
-  venv and missing from system Python. The code was never wrong.
-- "the UI looks different between my two windows" — system had Streamlit 1.61.1, the venv
-  has 1.62.0, and a default theme colour changed between those two releases. Identical
-  code, two different colours.
-
-Note that `streamlit --version` reports the *system* version too, so you cannot use it to
-check what a running server is using.
-
-**Checkpoint:** http://localhost:8501 shows the chat screen. Ask it "what is the weather
-in Lahore" and get a real answer. If a tool errors, fix that now — a missing API key looks
-exactly the same inside a container, only harder to see.
+**Checkpoint:** http://localhost:8000 shows the chat screen. `GROQ_API_KEY` has to be set
+before the process will even import. Ask "what is the weather in Lahore" only after the
+weather key is set too. A missing tool key looks the same inside a container, only harder
+to see.
 
 ---
 
@@ -260,61 +253,30 @@ Without it, `torch` installs its CUDA build and drags in several gigabytes of NV
 libraries that a container with no GPU can never use. Image goes from ~2 GB to ~7 GB.
 Keep that line at the top.
 
-### 4.2 Write the `Dockerfile`
+### 4.2 The Dockerfile
 
-```dockerfile
-FROM python:3.11-slim
+The live file is [../deploy/Dockerfile](../deploy/Dockerfile). Build context is the
+repository root, not the `deploy/` directory:
 
-# Prevent Python cache files and enable immediate container logs
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
-
-WORKDIR /app
-
-# build-essential supports packages that require compilation
-# libgomp1 is commonly required by faiss-cpu
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    libgomp1 \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements first for Docker build caching
-COPY requirements.txt .
-
-# Install Python dependencies
-RUN python -m pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
-
-# Copy the complete project
-COPY . .
-
-EXPOSE 8501
-
-CMD ["streamlit", "run", "app.py", \
-     "--server.port=8501", \
-     "--server.address=0.0.0.0", \
-     "--server.headless=true", \
-     "--browser.gatherUsageStats=false"]
+```bash
+docker build -f deploy/Dockerfile -t zeeshanyq/agenticbot:latest .
 ```
 
-Line by line, the parts that are not obvious:
+Parts that are not obvious:
 
 - **`PYTHONUNBUFFERED=1`** — without it, Python holds log output in a buffer and
-  `docker logs` shows you nothing while the container is dying. This one line is the
-  difference between a diagnosable crash and a mystery.
-- **`libgomp1`** — the OpenMP runtime. `faiss-cpu` (the vector search library used for
-  PDF search) fails at import without it, and the error message does not mention OpenMP.
-- **`COPY requirements.txt .` before `COPY . .`** — this ordering is the single biggest
-  time saver in the file. Docker caches each step. Because the dependency install happens
-  *before* your code is copied in, editing `app.py` does not invalidate the install layer.
-  First build: 5–10 minutes. Every build after that: seconds. Reverse these two lines and
-  every code change costs you a full 1 GB reinstall.
-- **`--server.address=0.0.0.0`** — binds all network interfaces. Leave it out and the
-  container starts, looks perfectly healthy in `docker ps`, and the port publish reaches
-  nothing. You will think the server is broken. It is this flag.
-- **`--server.headless=true`** — stops Streamlit trying to open a browser and asking for
-  your email on first run. In a container there is nobody to answer.
+  `docker logs` shows you nothing while the container is dying.
+- **`libgomp1`** — the OpenMP runtime. `faiss-cpu` fails at import without it, and the
+  error message does not mention OpenMP.
+- **`COPY deploy/requirements.txt` before `COPY dexter/`** — Docker caches each step.
+  Editing application code does not invalidate the install layer. First build is several
+  minutes. Later builds are seconds unless the requirements file changed.
+- **`google_tools.py` is inside `dexter/`** — the image used to copy a file list and
+  omitted it, so the container crashed on import. Copy the package directory.
+- **`--host 0.0.0.0`** — binds all interfaces. Leave it out and the container looks
+  healthy in `docker ps` while the published port reaches nothing.
+- **`--headless`** — Chainlit does not try to open a browser or prompt on first run.
+- The process runs as a non-root user named `dexter`.
 
 ### 4.3 Write `.dockerignore`
 
@@ -342,7 +304,7 @@ get injected at run time instead, in Part 11.
 ### 4.4 Build it
 
 ```bash
-docker build -t zeeshanyq/agenticbot:latest .
+docker build -f deploy/Dockerfile -t zeeshanyq/agenticbot:latest .
 ```
 
 The `-t` name is `yourdockerhubusername/imagename:tag`. It has to start with your Docker
@@ -353,21 +315,21 @@ First run takes 5–10 minutes and is almost entirely download.
 ### 4.5 Run it
 
 ```bash
-docker run -d --name agenticbot -p 8502:8501 --env-file .env zeeshanyq/agenticbot:latest
+docker run -d --name agenticbot -p 8001:8000 --env-file .env zeeshanyq/agenticbot:latest
 ```
 
 - `-d` — detached, runs in the background
 - `--name agenticbot` — so you can refer to it later. A name cannot be used twice; remove
   the old container before reusing it
-- `-p 8502:8501` — **left is the port on your machine, right is the port inside the
-  container.** Streamlit always listens on 8501 inside. Using 8502 outside keeps your local
-  `uv run streamlit` on 8501 free so both can run at once
+- `-p 8001:8000` — **left is the port on your machine, right is the port inside the
+  container.** Chainlit listens on 8000 inside. Using 8001 outside keeps a local
+  `uv run chainlit` on 8000 free so both can run at once
 - `--env-file .env` — passes the keys in at run time
 
 **Env vars are read at run time, not baked into the image.** Changing `.env` needs a
 container restart, never a rebuild.
 
-**Checkpoint:** http://localhost:8502 works, and a tool call succeeds. If the page loads
+**Checkpoint:** http://localhost:8001 works, and a tool call succeeds. If the page loads
 but every tool errors, your `.env` has a spacing problem — go back to 3.2. This command
 shows the length of each value without printing the secrets:
 
@@ -597,8 +559,8 @@ runs even when the deploy failed, so a red pipeline cannot fill the disk.
 ```bash
 docker run -d \
   --restart unless-stopped \
-  --name stapp \
-  -p 8501:8501 \
+  --name dexter \
+  -p 8000:8000 \
   -e GROQ_API_KEY \
   -e TAVILY_API_KEY \
   ...
@@ -616,13 +578,13 @@ the value somewhere it can leak.
 
 ```bash
 for attempt in $(seq 1 12); do
-  if docker exec stapp python -c \
-    "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=3)" \
+  if docker exec dexter python -c \
+    "import urllib.request; urllib.request.urlopen('http://localhost:8000/', timeout=3)" \
     >/dev/null 2>&1; then
-    echo "Streamlit application is healthy."
+    echo "Chainlit application is healthy."
     exit 0
   fi
-  echo "Waiting for Streamlit to become ready..."
+  echo "Waiting for Chainlit to become ready..."
   sleep 5
 done
 ```
@@ -653,7 +615,7 @@ Security group — inbound rules:
 | Type | Port | Source | Why |
 |---|---|---|---|
 | SSH | 22 | **My IP** | you, setting the box up |
-| Custom TCP | 8501 | 0.0.0.0/0 | so anyone can reach the app |
+| Custom TCP | 8000 | 0.0.0.0/0 | so anyone can reach the app |
 
 Leave outbound at the default "all traffic". That is what lets the runner reach GitHub and
 Docker Hub. **You do not need to open any inbound port for the pipeline itself** — the
@@ -789,7 +751,7 @@ At the end, GitHub tells you to run:
 **Do not.** It works — the runner comes online, your first deploy succeeds, and you feel
 finished. Then you close your SSH window, and `run.sh` dies with the session.
 
-The instance stays up. Port 22 answers. Port 8501 answers, because the container is still
+The instance stays up. Port 22 answers. Port 8000 answers, because the container is still
 running. Everything looks fine. But the runner is **Offline**, and every deploy from then on
 sits in `Waiting for a runner to pick up this job...` indefinitely. Jobs do not fail — they
 queue. There is no error to search for.
@@ -885,12 +847,12 @@ Open the **Actions** tab and watch. Expect roughly:
 |---|---|---|
 | lint | ~30 s | green |
 | build & push | 8–12 min first time | green. Later runs 1–2 min thanks to the cache |
-| deploy | ~1 min | green, ending in "Streamlit application is healthy." |
+| deploy | ~1 min | green, ending in "Chainlit application is healthy." |
 
 If the deploy job sits on `Waiting for a runner...`, the runner is Offline. Go back to
 Part 10.
 
-**Checkpoint:** open `http://YOUR-EC2-PUBLIC-IP:8501`. Ask a question that uses a tool.
+**Checkpoint:** open `http://YOUR-EC2-PUBLIC-IP:8000`. Ask a question that uses a tool.
 
 ### Do not judge the deploy by the landing screen
 
@@ -904,15 +866,15 @@ deploy had in fact succeeded every single time. Do not use it as evidence of any
 Verify properly instead — SSH in and check the code actually inside the container:
 
 ```bash
-docker exec stapp grep -c "Data_Agent" /app/app.py
+docker exec dexter grep -c "Data_Agent" /app/dexter/backend.py
 ```
 
 ```bash
-docker ps --filter "name=^stapp$"
+docker ps --filter "name=^dexter$"
 ```
 
 ```bash
-docker logs --tail 100 stapp
+docker logs --tail 100 dexter
 ```
 
 Or by behaviour: ask for a chart, or upload a spreadsheet. Older versions of the backend
@@ -920,7 +882,7 @@ have no such code path at all, so it cannot fake a pass.
 
 ### One naming trap
 
-The container **on the server** is called `stapp`. The examples in the README, for running
+The container **on the server** is called `dexter`. The examples in the README, for running
 locally, use `agenticbot`. Copy a command from one context into the other and it silently
 targets a container that does not exist — `docker logs agenticbot` on the server just says
 "No such container" while the real app runs happily beside it.
@@ -950,11 +912,11 @@ Three to five minutes later it is live. That is the whole point of everything ab
 Every build also published an immutable `:sha-<short>` tag. To go back, SSH into the box:
 
 ```bash
-docker stop stapp && docker rm stapp
+docker stop dexter && docker rm dexter
 ```
 
 ```bash
-docker run -d --restart unless-stopped --name stapp -p 8501:8501 --env-file .env zeeshanyq/agenticbot:sha-abc1234
+docker run -d --restart unless-stopped --name dexter -p 8000:8000 --env-file .env zeeshanyq/agenticbot:sha-abc1234
 ```
 
 Better still, `git revert` the bad commit and push — that puts the pipeline back in charge
@@ -1007,14 +969,14 @@ Same root cause, louder symptom. Trailing space before the `=`.
 Check in this order:
 
 1. Is the container running? `docker ps` on the box.
-2. Is port 8501 open to 0.0.0.0/0 in the security group? Easy to forget on a rebuilt box.
-3. Does the Dockerfile `CMD` include `--server.address=0.0.0.0`? Without it the container
+2. Is port 8000 open to 0.0.0.0/0 in the security group? Easy to forget on a rebuilt box.
+3. Does the Dockerfile `CMD` include `--host 0.0.0.0`? Without it the container
    is healthy and reachable by nothing.
 
 ### `Could not open requirements file: requirements.txt` during the build
 
-The Dockerfile is copying files in the wrong order. `COPY requirements.txt .` must come
-before the `pip install`, and `COPY . .` must come after it.
+The Dockerfile is copying files in the wrong order. `COPY deploy/requirements.txt` must come
+before the `pip install`, and the `dexter/` copy must come after it.
 
 ### Build succeeds locally, fails in Actions
 
@@ -1024,13 +986,13 @@ into `requirements.txt`.
 
 ### `ports are not available: ... bind: Only one usage of each socket address`
 
-Local only. Something already holds that port, usually your own `streamlit run`.
+Local only. Something already holds that port, usually your own Chainlit process.
 
 ```bash
-netstat -ano | grep ":8501"
+netstat -ano | grep ":8000"
 ```
 
-Then either publish a different host port (`-p 8502:8501`) or stop the process with
+Then either publish a different host port (`-p 8001:8000`) or stop the process with
 `taskkill //PID <pid> //F`.
 
 ### Disk full on the server
@@ -1067,7 +1029,7 @@ credit until the instance is **terminated**.
 
 To take everything down:
 
-1. On the box: `docker rm -f stapp`
+1. On the box: `docker rm -f dexter`
 2. Console → EC2 → Instances → select → Instance state → **Terminate**
 3. Confirm the attached volume is deleted with it
 4. Release any Elastic IP separately — an unattached Elastic IP bills on its own
@@ -1079,9 +1041,9 @@ again — the code and the pipeline need no changes at all. A rebuilt instance g
 
 ### Where this project stands right now
 
-The EC2 instance `i-02fe84bc2bea47c56` was **terminated on 2026-08-25** to stop charges,
-along with its 32 GiB volume. There were never any Elastic IPs or snapshots. The old
-address `16.16.171.155` is dead. Nothing is running; nothing is billing.
+The EC2 instance was **terminated on 2026-08-25** to stop charges, along with its 32 GiB
+volume. There were never any Elastic IPs or snapshots. The former public address is not
+recorded here. Nothing is running; nothing is billing.
 
 The full pipeline was proven working end to end earlier that same day, before teardown.
 
@@ -1089,7 +1051,7 @@ The full pipeline was proven working end to end earlier that same day, before te
 |---|---|
 | GitHub repo | https://github.com/Zeeshanx186/Agentic-Chatbot-Using-LangGraph |
 | Docker Hub image | `zeeshanyq/agenticbot` — still published |
-| Container name on the server | `stapp` |
+| Container name on the server | `dexter` |
 | Tag the deploy pulls | `:main` |
 | Region | eu-north-1 (Stockholm) |
 
@@ -1101,23 +1063,23 @@ Four files. Copy them into a new project, change the names, and the pipeline wor
 
 ### `Dockerfile`
 
-See [Part 4.2](#42-write-the-dockerfile), or the live file: [Dockerfile](Dockerfile).
+See [Part 4.2](#42-the-dockerfile), or the live file: [../deploy/Dockerfile](../deploy/Dockerfile).
 
 ### `.dockerignore`
 
-See [Part 4.3](#43-write-dockerignore), or [.dockerignore](.dockerignore).
+See [Part 4.3](#43-write-dockerignore), or [../.dockerignore](../.dockerignore).
 
 ### `.github/workflows/cicd.yaml`
 
-The live, working file: [.github/workflows/cicd.yaml](.github/workflows/cicd.yaml). Copy it
+The live, working file: [../.github/workflows/cicd.yaml](../.github/workflows/cicd.yaml). Copy it
 whole. The only things to change for a new project are the secret names in the
 `Validate application secrets` step and the `-e` flags in the `docker run` step — those are
 this app's API keys.
 
 Two values are worth deciding consciously when you reuse it:
 
-- The container name, `stapp`, appears in five steps. Change it everywhere or nowhere.
-- The port, `8501`, appears in the `docker run` publish, in the health check URL, and in
+- The container name, `dexter`, appears in five steps. Change it everywhere or nowhere.
+- The port, `8000`, appears in the `docker run` publish, in the health check URL, and in
   your security group. All three must agree.
 
 ### `.env` (never committed)
@@ -1152,7 +1114,7 @@ No spaces around `=`.
 | **AMI** | The OS image an EC2 instance boots from |
 | **Security group** | The firewall around an EC2 instance |
 | **EBS** | The disk attached to an EC2 instance. Bills separately, until *terminated* |
-| **Health endpoint** | A URL an app exposes that answers only when it is truly ready. Streamlit's is `/_stcore/health` |
+| **Health check** | A request that succeeds only when the app is truly ready. This image answers `GET /` |
 
 ---
 
@@ -1182,5 +1144,4 @@ The three failures that will cost you the most time, in order:
 
 1. The runner started with `./run.sh` and silently went Offline (Part 10).
 2. `.env` written with spaces around `=`, so keys work locally and fail in Docker (Part 4).
-3. Missing `--server.address=0.0.0.0`, so the container is healthy and unreachable
-   (Part 4.2).
+3. Missing `--host 0.0.0.0`, so the container is healthy and unreachable (Part 4.2).

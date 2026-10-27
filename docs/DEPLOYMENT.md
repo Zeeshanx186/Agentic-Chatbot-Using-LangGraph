@@ -14,13 +14,13 @@ Steps 1 and 2 run on GitHub's `ubuntu-latest` runners. Steps 4 and 5 run **on th
 box itself**, through a self-hosted runner that polls GitHub for work. There is no SSH
 step and no private key stored in GitHub.
 
-Pipeline file: [.github/workflows/cicd.yaml](.github/workflows/cicd.yaml)
+Pipeline file: [../.github/workflows/cicd.yaml](../.github/workflows/cicd.yaml)
 
 | Job | Runs on | Does |
 |---|---|---|
 | `lint` | ubuntu-latest | flake8. Hard-fails on `E9,F63,F7,F82`; style report advisory |
 | `push_to_registry` | ubuntu-latest | Buildx build, push to Docker Hub, registry build cache |
-| `continuous_deployment` | self-hosted (EC2) | Validate secrets, pull `:main`, replace container `stapp`, health check, prune |
+| `continuous_deployment` | self-hosted (EC2) | Validate secrets, pull `:main`, replace container `dexter`, health check, prune |
 
 Triggers: push to `main`, pull requests to `main`, manual `workflow_dispatch`.
 Pull requests build the image to prove the Dockerfile still works, but never log in,
@@ -30,7 +30,7 @@ never push, and never deploy. Only `main` publishes and deploys.
 
 ## 1. Login to AWS console.
 
-Account used for this project: `206465504937`, region **eu-north-1 (Stockholm)**.
+Region used for this project: **eu-north-1 (Stockholm)**. The account id is intentionally not recorded here.
 
 Billing note: this account is on the AWS Free Plan, so usage draws down credits rather
 than money. Watch the credit balance at
@@ -52,7 +52,7 @@ This is for a human logging into the console to launch and terminate instances.
 `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_REGION` secrets belong to the ECR
 variant of this deployment, where GitHub's hosted runner has to authenticate into AWS.
 Here the registry is Docker Hub and the deploy job runs on the EC2 box already, so
-nothing in [.github/workflows/cicd.yaml](.github/workflows/cicd.yaml) reads those three
+nothing in [../.github/workflows/cicd.yaml](../.github/workflows/cicd.yaml) reads those three
 values. Adding them changes no behaviour, but a long-lived access key sitting in GitHub
 is a real credential to lose. Skip them.
 
@@ -70,12 +70,12 @@ is a real credential to lose. Skip them.
 | Port | Source | Why |
 |---|---|---|
 | 22 | your IP | SSH |
-| 8501 | 0.0.0.0/0 | Streamlit |
+| 8000 | 0.0.0.0/0 | Chainlit |
 
 Outbound stays default (all traffic) — the runner polls GitHub and the box pulls from
 Docker Hub.
 
-The app is reached at `http://<EC2-public-IP>:8501`.
+The app is reached at `http://<EC2-public-IP>:8000`.
 
 ---
 
@@ -99,7 +99,7 @@ sudo usermod -aG docker ubuntu
 newgrp docker
 ```
 
-Note: Do the port mapping to this port:- 8501
+Note: Do the port mapping to this port:- 8000
 
 `usermod -aG docker ubuntu` is what lets the runner call `docker` without `sudo`. If the
 runner service was installed *before* this ran, restart the service or the deploy job
@@ -129,7 +129,7 @@ Typing a custom label at the `config.sh` prompt makes every deploy job hang on
 ### Install it as a service, not `./run.sh`
 
 `./run.sh` is tied to the SSH session and dies when the terminal closes. The instance
-stays up — port 22 and port 8501 keep answering — while the runner shows **Offline** and
+stays up — port 22 and port 8000 keep answering — while the runner shows **Offline** and
 every deploy queues forever. "The server is reachable" proves nothing about the runner.
 
 ```bash
@@ -200,32 +200,28 @@ the step's environment. No secret is ever written into a command line or into th
 
 ## 7. The image being deployed
 
-[Dockerfile](Dockerfile):
+[../deploy/Dockerfile](../deploy/Dockerfile). The build context is the repository root.
 
-| Line | Why it is there |
+| Piece | Why it is there |
 |---|---|
 | `FROM python:3.11-slim` | Debian Trixie, still receiving security updates. Was `slim-buster`, which is end-of-life |
 | `PYTHONDONTWRITEBYTECODE=1` | No `.pyc` files written into the container layer |
-| `PYTHONUNBUFFERED=1` | Streamlit and tool logs appear in `docker logs` immediately instead of sitting in a buffer — this is what makes a crash diagnosable |
+| `PYTHONUNBUFFERED=1` | Chainlit and tool logs appear in `docker logs` immediately instead of sitting in a buffer |
 | `PIP_NO_CACHE_DIR=1` | pip's wheel cache never lands in the image |
 | `build-essential` | Compiles any dependency without a prebuilt wheel for this platform |
 | `libgomp1` | OpenMP runtime, required by `faiss-cpu` at import |
-| `COPY requirements.txt .` before `COPY . .` | The ~1 GB dependency layer stays cached across code edits. Reversing these two makes every code change a full reinstall |
-| `EXPOSE 8501` | Documents the port; the publish is `-p 8501:8501` at run time |
+| `libgl1`, `libglib2.0-0` | OCR / OpenCV runtime libraries |
+| `COPY deploy/requirements.txt` before the app code | The dependency layer stays cached across code edits |
+| `COPY dexter/` | Application package, including `google_tools.py` |
+| non-root `USER dexter` | The process does not run as root |
+| `EXPOSE 8000` | Documents the port; the publish is `-p 8000:8000` at run time |
+| `chainlit run ... --host 0.0.0.0 --port 8000 --headless` | Bind all interfaces, no browser launch, no first-run prompt |
 
-The `CMD` flags matter for a container specifically:
-
-```
---server.address=0.0.0.0     # bind all interfaces, or -p publishes to nothing
---server.headless=true       # no browser-open attempt, no first-run email prompt
---browser.gatherUsageStats=false
-```
-
-Without `--server.address=0.0.0.0`, the container starts, `docker ps` shows it healthy,
-and `http://<EC2-IP>:8501` refuses the connection.
+Without `--host 0.0.0.0`, the container starts, `docker ps` shows it healthy,
+and `http://<EC2-IP>:8000` refuses the connection.
 
 The `--extra-index-url https://download.pytorch.org/whl/cpu` line at the top of
-[requirements.txt](requirements.txt) is what keeps the image around 2 GB instead of
+[../deploy/requirements.txt](../deploy/requirements.txt) is what keeps the image around 2 GB instead of
 6–7 GB. The default torch wheel is the CUDA build and drags in several GB of NVIDIA
 libraries the container has no GPU to use.
 
@@ -238,20 +234,20 @@ On the EC2 box, in order:
 1. **Log in to Docker Hub** — so the box can pull the image.
 2. **Validate application secrets** — fails the run before anything is stopped.
 3. **Pull** `docker.io/zeeshanyq/agenticbot:main`.
-4. **Stop and remove** the existing container `stapp`. Both commands end in `|| echo`,
+4. **Stop and remove** the existing container `dexter`. Both commands end in `|| echo`,
    so a first-ever deploy with no container present does not fail.
 5. **Run** the new container:
 
 ```bash
-docker run -d --restart unless-stopped --name stapp -p 8501:8501 -e GROQ_API_KEY -e TAVILY_API_KEY "$IMAGE_PATH:main"
+docker run -d --restart unless-stopped --name dexter -p 8000:8000 -e GROQ_API_KEY -e TAVILY_API_KEY "$IMAGE_PATH:main"
 ```
 
-6. **Verify container is running** — `docker inspect -f '{{.State.Running}}' stapp`, and
+6. **Verify container is running** — `docker inspect -f '{{.State.Running}}' dexter`, and
    dump the last 100 log lines if not.
-7. **Verify Streamlit health endpoint** — polls `/_stcore/health` from inside the
-   container, 12 attempts, 5 s apart. This image imports torch and
-   sentence-transformers at startup, so "the process exists" is not the same as "the app
-   is ready", and a config crash lands later still.
+7. **Verify the Chainlit HTTP check** — polls `http://localhost:8000/` from inside the
+   container, 12 attempts, 5 s apart. The process can exist before Chainlit is accepting
+   connections, and a config crash can land later still. Embeddings and OCR load on first
+   use, not at import.
 8. **Clean up old images** — `docker image prune -af --filter "until=24h"`, with
    `if: always()` so a red pipeline cannot fill the root volume.
 
@@ -277,31 +273,29 @@ the running container is never cancelled.
 
 ## 9. Verifying a deploy actually took effect
 
-**Never judge this from the landing screen.** The empty chat screen — "How can I help?",
-the tool badges, the four suggestion chips — is byte-identical between the basic and the
-advanced version of `app.py`. It repeatedly reads as "my new code didn't deploy" when
-the deploy had in fact succeeded.
+**Never judge this from the landing screen alone.** The welcome screen can look the same
+across releases.
 
 Check one of these instead:
 
 ```bash
-docker exec stapp grep -c "Data_Agent" /app/app.py
+docker exec dexter grep -c "Data_Agent" /app/dexter/backend.py
 ```
 
 ```bash
-docker ps --filter "name=^stapp$"
+docker ps --filter "name=^dexter$"
 ```
 
 ```bash
-docker logs --tail 100 stapp
+docker logs --tail 100 dexter
 ```
 
 Or by behaviour: ask for a chart, or upload a spreadsheet. Neither path exists in the
 older backend at all.
 
-Note the container on the server is named **`stapp`**. The Docker examples in
-[README.md](README.md) use `agenticbot` for local runs. Docker commands copied between
-the two contexts silently target nothing.
+Note the container on the server is named **`dexter`**. Local `docker run` examples in
+[../README.md](../README.md) may use another container name. Docker commands copied between
+the two contexts target nothing if the name does not match.
 
 ---
 
@@ -310,7 +304,7 @@ the two contexts silently target nothing.
 Stopping an instance does **not** stop the EBS volume from consuming credit. Terminate it.
 
 ```bash
-docker rm -f stapp
+docker rm -f dexter
 ```
 
 Then in the console: EC2 → Instances → select → Instance state → **Terminate**. Confirm
@@ -328,10 +322,10 @@ public IP**.
 
 ## 11. Current status
 
-**Terminated 2026-08-25.** Instance `i-02fe84bc2bea47c56` (`Agentic-chatbot-Machine`,
-c7i-flex.large, eu-north-1c) is gone along with its 32 GiB gp3 volume. No Elastic IPs and
-no snapshots ever existed. The old address `16.16.171.155` is dead. Nothing is running
-and nothing is billing.
+**Terminated 2026-08-25.** The EC2 instance in eu-north-1c (c7i-flex.large, 32 GiB gp3)
+is gone, along with its volume. No Elastic IPs and no snapshots were left behind. The
+former public address is not recorded here. Nothing from that instance is running, and
+nothing from it is billing.
 
 The full pipeline was proven working end to end earlier that same day, before teardown.
 
@@ -339,6 +333,6 @@ The full pipeline was proven working end to end earlier that same day, before te
 |---|---|
 | GitHub repo | https://github.com/Zeeshanx186/Agentic-Chatbot-Using-LangGraph |
 | Docker Hub image | `zeeshanyq/agenticbot` — still published |
-| Container name on the server | `stapp` |
+| Container name on the server | `dexter` |
 | Tag the deploy pulls | `:main` |
 | Region | eu-north-1 (Stockholm) |

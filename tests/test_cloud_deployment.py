@@ -1,7 +1,7 @@
 """Integration checks: DATABASE_URL must point to the deployment database.
 
 Uses UUID test records and removes only those records afterwards.
-Run: python -m unittest test_cloud_deployment -v
+Run: python -m unittest tests.test_cloud_deployment -v
 """
 
 import os
@@ -9,7 +9,7 @@ from pathlib import Path
 import unittest
 import uuid
 
-import cloud_store
+import dexter.cloud_store as cloud_store
 
 
 @unittest.skipUnless(cloud_store.ENABLED, "DATABASE_URL is required")
@@ -18,10 +18,10 @@ class CloudDeploymentTest(unittest.TestCase):
         from fastapi.testclient import TestClient
         from langchain_core.messages import HumanMessage
         from langgraph.graph import StateGraph, MessagesState, START, END
-        import chat_store
+        import dexter.chat_store as chat_store
 
         os.environ.setdefault("DEXTER_STAGING_PASSWORD", uuid.uuid4().hex)
-        import vercel_app
+        import dexter.vercel_app as vercel_app
 
         thread = "deployment-test-" + uuid.uuid4().hex
         file_id = None

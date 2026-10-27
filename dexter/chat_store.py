@@ -1,8 +1,6 @@
 """Frontend-side persistence and model-catalog helpers for the chatbot UI.
 
-Backend-agnostic: each app calls bind() with its own backend module, so the
-same helpers serve app_HITL.py and app_Adv_Tools.py without either app pulling
-in the other's graph, model, and embeddings.
+The Chainlit app calls bind() with the backend module before use.
 """
 
 from langchain_core.messages import AIMessage, HumanMessage
@@ -12,10 +10,13 @@ import json
 import os
 import re
 import requests
-import cloud_store
+from dexter import cloud_store
 
-TITLES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_titles.json")
-FEEDBACK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_feedback.json")
+# Runtime files stay at the project root (parent of this package), which is
+# /app inside the image and the repo root when you launch from there.
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TITLES_PATH = os.path.join(_PROJECT_ROOT, "chat_titles.json")
+FEEDBACK_PATH = os.path.join(_PROJECT_ROOT, "chat_feedback.json")
 
 THINK_RE = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
 

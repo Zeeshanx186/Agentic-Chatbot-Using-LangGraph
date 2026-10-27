@@ -3,9 +3,9 @@
   "framework": "fastapi",
   "regions": ["iad1"],
   "functions": {
-    "vercel_app.py": {
+    "dexter/vercel_app.py": {
       "maxDuration": 300,
-      "excludeFiles": "{.git/**,.venv/**,.cache/**,.files/**,uploads/**,extracts/**,faiss_db/**,*.db*,chat_titles.json,chat_feedback.json,.env*,docs/**,test_*.py,app.py}"
+      "excludeFiles": "{.git/**,.venv/**,.cache/**,.files/**,uploads/**,extracts/**,faiss_db/**,*.db*,chat_titles.json,chat_feedback.json,.env*,docs/**,tests/**,deploy/**,scripts/**,.github/**}"
     }
   }
 }

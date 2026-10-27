@@ -3,16 +3,23 @@
 Shares backend.py, chat_store.py, and local/cloud persistence with the
 deployed Chainlit image. Streamlit UI has been removed.
 
-Run with:  chainlit run chainlit_app.py
+Run with:  chainlit run dexter/chainlit_app.py
 """
 
-import backend as backend
-from backend import chatbot, extract_text_for_empowergpt, ingest_rag_document, tools
+import sys
+from pathlib import Path
+
+# Chainlit loads this file with the package directory on sys.path, not the repo root.
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+import dexter.backend as backend
+from dexter.backend import chatbot, ingest_rag_document
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
-import chat_store
-import cloud_store
+from dexter import chat_store, cloud_store
 
 chat_store.bind(backend)
 
@@ -27,7 +34,7 @@ import uuid
 import chainlit as cl
 from chainlit.input_widget import Select
 
-from chainlit_data_layer import ChatStoreDataLayer, _FIXED_USER_IDENTIFIER
+from dexter.chainlit_data_layer import ChatStoreDataLayer, _FIXED_USER_IDENTIFIER
 
 
 # chatbot.stream() is a *synchronous* generator: every next() on it runs an LLM
@@ -104,7 +111,6 @@ TOOLS_UI = {
     "recall":        ("🧠", "Checking memory", "Checked memory"),
     "forget":        ("🗑️", "Clearing memory", "Cleared memory"),
     "cursor_coding": ("🛠️", "Running Cursor cloud agent", "Cursor cloud agent finished"),
-    "empowergpt":     ("🏢", "Asking EmpowerGPT", "Asked EmpowerGPT"),
 }
 
 
@@ -416,7 +422,6 @@ async def process_message(message: cl.Message):
     attached_paths = []
     attached_images = []
     indexed_names = []
-    empowergpt_docs = []  # (name, text) for EmpowerGPT document_text
 
     # ---- Handle file uploads ----
     if message.elements:
@@ -461,32 +466,6 @@ async def process_message(message: cl.Message):
                         author="System",
                     ).send()
 
-    # ---- Extract text for EmpowerGPT asks (not a second RAG path) ----
-    empowergpt_intent = bool(
-        re.search(
-            r"\b(empower\s*gpt|empowergpt_ask|ask\s+empowergpt)\b",
-            user_input or "",
-            flags=re.I,
-        )
-    )
-    if message.elements and empowergpt_intent:
-        for element in message.elements:
-            if not hasattr(element, "path") or not element.path:
-                continue
-            file_path = element.path
-            file_name = element.name or os.path.basename(file_path)
-            extension = os.path.splitext(file_name)[1].lower()
-            if extension not in {".txt", ".md", ".csv", ".json", ".pdf", ".docx"} | IMAGE_EXTENSIONS:
-                continue
-            try:
-                extracted = await asyncio.to_thread(
-                    extract_text_for_empowergpt, file_path, file_name
-                )
-                if extracted and extracted.strip():
-                    empowergpt_docs.append((file_name, extracted.strip()))
-            except Exception:
-                pass
-
     # ---- Build the agent-facing input with file notes ----
     turn_notes = []
 
@@ -507,28 +486,6 @@ async def process_message(message: cl.Message):
             "available now. Never ask the user to upload them again. The job is to "
             "%s.\n%s"
         ) % (len(attached_paths), " and ".join(kinds), listing))
-
-    if empowergpt_docs:
-        # Cap what we put in the agent prompt; local API also caps at ~80k.
-        max_chars = 80000
-        used = 0
-        chunks = []
-        names = []
-        for name, body in empowergpt_docs:
-            names.append(name)
-            remain = max_chars - used
-            if remain <= 0:
-                break
-            piece = body if len(body) <= remain else body[:remain] + "\n...[truncated]"
-            chunks.append("--- Document: %s ---\n%s" % (name, piece))
-            used += len(piece)
-        blob = "\n\n".join(chunks)
-        turn_notes.append(
-            "EmpowerGPT document context is ready. When calling empowergpt_ask, "
-            "pass document_names=%r and document_text equal to the following "
-            "extracted text (do not web-search these files):\n%s"
-            % (",".join(names), blob)
-        )
 
     if turn_notes:
         note = " ".join(turn_notes)

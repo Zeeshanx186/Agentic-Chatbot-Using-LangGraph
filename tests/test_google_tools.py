@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import patch, MagicMock
 from langchain_core.messages import ToolMessage
-import google_tools
+import dexter.google_tools as google_tools
 
 
 class GoogleToolsTest(unittest.TestCase):
@@ -24,7 +24,7 @@ class GoogleToolsTest(unittest.TestCase):
             self.assertIn("Google OAuth client secrets file", result)
             self.assertIn("credentials.json", result)
 
-    @patch("google_tools.interrupt")
+    @patch("dexter.google_tools.interrupt")
     def test_gmail_send_email_declined(self, mock_interrupt):
         mock_interrupt.return_value = "no"
         result = google_tools.gmail_send_email.invoke({
@@ -35,7 +35,7 @@ class GoogleToolsTest(unittest.TestCase):
         self.assertIn("DECLINED", result)
         mock_interrupt.assert_called_once()
 
-    @patch("google_tools.interrupt")
+    @patch("dexter.google_tools.interrupt")
     def test_calendar_delete_event_declined(self, mock_interrupt):
         mock_interrupt.return_value = "no"
         result = google_tools.calendar_delete_event.invoke({

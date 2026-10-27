@@ -1,7 +1,7 @@
 [project]
 name = "agents"
 version = "0.1.0"
-description = "Add your description here"
+description = "Dexter: a LangGraph tool-calling chatbot with a Chainlit UI"
 readme = "README.md"
 authors = [
     { name = "Zeeshan", email = "zeeshanyaqoob.beef20@iba-suk.edu.pk" }
@@ -50,7 +50,7 @@ dev = [
 ]
 
 [tool.vercel]
-entrypoint = "vercel_app:app"
+entrypoint = "dexter.vercel_app:app"
 
 [[tool.uv.index]]
 name = "pytorch-cpu"

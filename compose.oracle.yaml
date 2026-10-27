@@ -1,0 +1,26 @@
+services:
+  dexter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: /srv/dexter.env
+    environment:
+      GROQ_MAX_TOKENS: "512"
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./:/app
+      - model-cache:/home/dexter/.cache
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+volumes:
+  model-cache:

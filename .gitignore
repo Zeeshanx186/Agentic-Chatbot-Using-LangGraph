@@ -227,3 +227,16 @@ chat_titles.json
 faiss_db/
 uploads/
 extracts/
+.vercel/
+chat_feedback.json
+
+.vercel
+.env*
+
+credentials.json
+token.json
+
+# private server notes and generated outputs
+docs/oracle-deployment.md
+ai_news.xlsx
+

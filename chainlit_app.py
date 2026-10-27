@@ -1,20 +1,23 @@
-"""Chainlit UI for the Agentic Chatbot — parallel to app.py (Streamlit).
+"""Chainlit UI for Dexter (LangGraph backend).
 
-Both UIs share the same backend.py graph, chat_store.py persistence, and
-agentic_chatbot.db / chat_titles.json / chat_feedback.json files.
+Shares backend.py, chat_store.py, and local/cloud persistence with the
+deployed Chainlit image. Streamlit UI has been removed.
 
 Run with:  chainlit run chainlit_app.py
 """
 
 import backend as backend
-from backend import chatbot, ingest_rag_document, tools
+from backend import chatbot, extract_text_for_empowergpt, ingest_rag_document, tools
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.types import Command
 
 import chat_store
+import cloud_store
 
 chat_store.bind(backend)
 
+import asyncio
+import hmac
 import json
 import os
 import re
@@ -27,6 +30,35 @@ from chainlit.input_widget import Select
 from chainlit_data_layer import ChatStoreDataLayer, _FIXED_USER_IDENTIFIER
 
 
+# chatbot.stream() is a *synchronous* generator: every next() on it runs an LLM
+# call or a whole tool (RapidOCR model loads, pandas, web fetches) inline. Doing
+# that directly inside an async handler pins Chainlit's event loop for the whole
+# turn, so the server stops answering HTTP entirely - health checks, the tunnel
+# and every other session included. It reads as "the app is down" from outside,
+# and with a local Ollama model (seconds per call, several calls per turn) it is
+# down for most of every turn. Pulling each item in a worker thread keeps the
+# loop free to serve while the model works.
+_STREAM_DONE = object()
+
+
+def _next_or_done(iterator):
+    """next(), but returns a sentinel instead of raising across the thread hop."""
+    try:
+        return next(iterator)
+    except StopIteration:
+        return _STREAM_DONE
+
+
+async def _aiter_stream(stream):
+    """Yield a sync generator's items without blocking the event loop."""
+    iterator = iter(stream)
+    while True:
+        item = await asyncio.to_thread(_next_or_done, iterator)
+        if item is _STREAM_DONE:
+            return
+        yield item
+
+
 # ============================== Data layer ==============================
 
 @cl.data_layer
@@ -35,20 +67,25 @@ def get_data_layer():
 
 
 # ============================== Auth ==============================
-# The /project/threads endpoint that backs the sidebar's thread list 401s
-# whenever there is no authenticated user, regardless of whether a data layer
-# is registered. This app has no real accounts, so header_auth_callback is
-# used purely to satisfy that check: it runs silently on load (no login page
-# is shown, unlike password/OAuth auth) and always authenticates the same
-# fixed local user that ChatStoreDataLayer already assumes everywhere.
-@cl.header_auth_callback
-async def header_auth(headers) -> cl.User:
-    return cl.User(identifier=_FIXED_USER_IDENTIFIER)
+# Staging requires a password for the single operator. Local mode uses silent
+# header login because the sidebar's thread endpoint requires authentication.
+# Both modes retain the data layer's fixed user; this is not visitor isolation.
+if os.environ.get("DEXTER_STAGING_PASSWORD"):
+    @cl.password_auth_callback
+    async def password_auth(username: str, password: str):
+        if (hmac.compare_digest(username.encode(), b"dexter")
+                and hmac.compare_digest(password.encode(), os.environ["DEXTER_STAGING_PASSWORD"].encode())):
+            return cl.User(identifier=_FIXED_USER_IDENTIFIER)
+        return None
+else:
+    @cl.header_auth_callback
+    async def header_auth(headers) -> cl.User:
+        return cl.User(identifier=_FIXED_USER_IDENTIFIER)
 
 
-# ============================== Ported from app.py ==============================
+# ============================== UI helpers ==============================
 
-# Tool metadata — pure data, no Streamlit dependency.
+# Tool metadata for Chainlit step labels.
 TOOLS_UI = {
     "search":        ("🔍", "Searching the web", "Searched the web"),
     "fetch_url":     ("🔗", "Reading the page", "Read the page"),
@@ -66,6 +103,8 @@ TOOLS_UI = {
     "remember":      ("🔖", "Saving to memory", "Saved to memory"),
     "recall":        ("🧠", "Checking memory", "Checked memory"),
     "forget":        ("🗑️", "Clearing memory", "Cleared memory"),
+    "cursor_coding": ("🛠️", "Running Cursor cloud agent", "Cursor cloud agent finished"),
+    "empowergpt":     ("🏢", "Asking EmpowerGPT", "Asked EmpowerGPT"),
 }
 
 
@@ -79,7 +118,7 @@ def tool_meta(tool_name):
 
 
 # Streamlit's markdown reads `$...$` as LaTeX. Chainlit has latex=false in
-# config, so this escaping should be unnecessary, but kept defensively.
+# config; kept defensively for currency amounts like $214.
 _CURRENCY_DOLLAR = re.compile(r"(?<!\$)\$(?=\s?\d)")
 
 
@@ -103,13 +142,13 @@ SUGGESTIONS = {
         "What is the compound interest on 25000 at 7.5% for 12 years?",
     "⛅ Weather in Lahore":
         "What is the current weather in Lahore?",
-    "📊 Price of NVDA":
-        "What is the current stock price of NVDA?",
+    "🛠️ Cursor coding demo":
+        "Use cursor_coding_agent to inspect the demo repo and summarize the top-level README in 3 bullets.",
 }
 
 # Nodes whose tokens are meant for the user.
 SPEAKING_NODES = {"Data_Agent", "Research_Agent", "Financial_Agent",
-                  "Memory_Agent", "synthesizer"}
+                  "Memory_Agent", "Coding_Agent", "Google_Agent", "synthesizer"}
 
 PLAN_ICONS = {
     "pending": "⬜",
@@ -119,14 +158,16 @@ PLAN_ICONS = {
     "blocked": "❓",
 }
 
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+UPLOAD_DIR = str(cloud_store.DATA_ROOT / "uploads")
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif"}
 
 
 def save_upload(file_name, file_bytes):
     """Persist an uploaded file and return its absolute path."""
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", file_name)
+    if cloud_store.ENABLED:
+        safe_name = uuid.uuid4().hex + "_" + safe_name
     path = os.path.join(UPLOAD_DIR, safe_name)
 
     stem, extension = os.path.splitext(path)
@@ -137,15 +178,15 @@ def save_upload(file_name, file_bytes):
 
     with open(path, "wb") as f:
         f.write(file_bytes)
+    cloud_store.persist_path(path)
     return path
 
 
 def render_tool_result_text(content):
     """Render a tool result as text for a cl.Step output.
 
-    Charts and extracts are rendered differently than in Streamlit because
-    Chainlit doesn't have native chart/dataframe widgets. Charts are noted
-    textually, extracts are rendered as markdown tables with CSV download.
+    Charts and extracts are summarized as text/markdown because Chainlit has
+    no native chart/dataframe widgets.
     """
     # Chart rendering
     chart_id = backend.chart_id_in(content)
@@ -222,8 +263,11 @@ async def set_starters():
             icon="/public/favicon.svg",
         ),
         cl.Starter(
-            label="📊 Price of NVDA",
-            message="What is the current stock price of NVDA?",
+            label="🛠️ Cursor coding demo",
+            message=(
+                "Use cursor_coding_agent to inspect the demo repo and summarize "
+                "the top-level README in 3 bullets."
+            ),
             icon="/public/favicon.svg",
         ),
     ]
@@ -234,7 +278,7 @@ async def set_starters():
 @cl.on_chat_start
 async def on_chat_start():
     """Initialize a new chat session."""
-    thread_id = str(uuid.uuid4())
+    thread_id = cl.context.session.thread_id
     cl.user_session.set("thread_id", thread_id)
     cl.user_session.set("history", [])
 
@@ -372,6 +416,7 @@ async def process_message(message: cl.Message):
     attached_paths = []
     attached_images = []
     indexed_names = []
+    empowergpt_docs = []  # (name, text) for EmpowerGPT document_text
 
     # ---- Handle file uploads ----
     if message.elements:
@@ -385,7 +430,9 @@ async def process_message(message: cl.Message):
 
             if extension == ".pdf":
                 try:
-                    ingest_rag_document(file_path, file_name)
+                    # Chunking + embedding a PDF is seconds of CPU; same event
+                    # loop concern as the stream loop above.
+                    await asyncio.to_thread(ingest_rag_document, file_path, file_name)
                     indexed_names.append(file_name)
                     await cl.Message(
                         content=f"📑 **{file_name}** — added to the knowledge base",
@@ -414,6 +461,32 @@ async def process_message(message: cl.Message):
                         author="System",
                     ).send()
 
+    # ---- Extract text for EmpowerGPT asks (not a second RAG path) ----
+    empowergpt_intent = bool(
+        re.search(
+            r"\b(empower\s*gpt|empowergpt_ask|ask\s+empowergpt)\b",
+            user_input or "",
+            flags=re.I,
+        )
+    )
+    if message.elements and empowergpt_intent:
+        for element in message.elements:
+            if not hasattr(element, "path") or not element.path:
+                continue
+            file_path = element.path
+            file_name = element.name or os.path.basename(file_path)
+            extension = os.path.splitext(file_name)[1].lower()
+            if extension not in {".txt", ".md", ".csv", ".json", ".pdf", ".docx"} | IMAGE_EXTENSIONS:
+                continue
+            try:
+                extracted = await asyncio.to_thread(
+                    extract_text_for_empowergpt, file_path, file_name
+                )
+                if extracted and extracted.strip():
+                    empowergpt_docs.append((file_name, extracted.strip()))
+            except Exception:
+                pass
+
     # ---- Build the agent-facing input with file notes ----
     turn_notes = []
 
@@ -434,6 +507,28 @@ async def process_message(message: cl.Message):
             "available now. Never ask the user to upload them again. The job is to "
             "%s.\n%s"
         ) % (len(attached_paths), " and ".join(kinds), listing))
+
+    if empowergpt_docs:
+        # Cap what we put in the agent prompt; local API also caps at ~80k.
+        max_chars = 80000
+        used = 0
+        chunks = []
+        names = []
+        for name, body in empowergpt_docs:
+            names.append(name)
+            remain = max_chars - used
+            if remain <= 0:
+                break
+            piece = body if len(body) <= remain else body[:remain] + "\n...[truncated]"
+            chunks.append("--- Document: %s ---\n%s" % (name, piece))
+            used += len(piece)
+        blob = "\n\n".join(chunks)
+        turn_notes.append(
+            "EmpowerGPT document context is ready. When calling empowergpt_ask, "
+            "pass document_names=%r and document_text equal to the following "
+            "extracted text (do not web-search these files):\n%s"
+            % (",".join(names), blob)
+        )
 
     if turn_notes:
         note = " ".join(turn_notes)
@@ -517,7 +612,7 @@ async def process_message(message: cl.Message):
             stream_mode=["messages", "updates"],
         )
 
-        for mode, payload in stream:
+        async for mode, payload in _aiter_stream(stream):
             if mode == "updates":
                 for node_name, delta in (payload or {}).items():
                     if node_name == "supervisor" and delta and "plan" in delta:
@@ -696,9 +791,9 @@ async def process_message(message: cl.Message):
 
     # ---- Post-turn title (real LLM title for first message) ----
     if is_first_message and full_answer.strip():
-        title = (
-            chat_store.title_from_attachments(attached_paths)
-            or chat_store.generate_title(display_input)
+        # generate_title is another LLM round trip - off the loop as well.
+        title = chat_store.title_from_attachments(attached_paths) or (
+            await asyncio.to_thread(chat_store.generate_title, display_input)
         )
         chat_store.save_title(thread_id, title)
 
@@ -735,7 +830,7 @@ async def process_message(message: cl.Message):
             )
 
             resume_answer = ""
-            for mode, rpayload in resume_stream:
+            async for mode, rpayload in _aiter_stream(resume_stream):
                 if mode == "updates":
                     continue
 

@@ -162,10 +162,10 @@ jobs:
 
       - name: Stop and remove existing container
         run: |
-          docker stop stapp || echo "Container is not running."
-          docker rm stapp || echo "Container does not exist."
+          docker stop dexter stapp || echo "Container is not running."
+          docker rm dexter stapp || echo "Container does not exist."
 
-      - name: Run Streamlit container
+      - name: Run Chainlit container
         env:
           IMAGE_PATH: ${{ secrets.REGISTRY || 'docker.io' }}/${{ secrets.DOCKER_USERNAME }}/${{ secrets.IMAGE_NAME }}
 
@@ -183,13 +183,17 @@ jobs:
           LANGSMITH_ENDPOINT: ${{ secrets.LANGSMITH_ENDPOINT }}
           LANGSMITH_API_KEY: ${{ secrets.LANGSMITH_API_KEY }}
           LANGSMITH_PROJECT: ${{ secrets.LANGSMITH_PROJECT }}
+
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          CURSOR_DEMO_REPO: ${{ secrets.CURSOR_DEMO_REPO }}
+          CURSOR_AUTO_CREATE_PR: ${{ secrets.CURSOR_AUTO_CREATE_PR }}
         run: |
           # -e VAR with no '=' forwards the value from this step's env, so no
           # secret is ever written into the command line or the run log.
           docker run -d \
             --restart unless-stopped \
-            --name stapp \
-            -p 8501:8501 \
+            --name dexter \
+            -p 8000:8000 \
             -e GROQ_API_KEY \
             -e TAVILY_API_KEY \
             -e OPENWEATHER_API_KEY \
@@ -202,39 +206,39 @@ jobs:
             -e LANGSMITH_ENDPOINT \
             -e LANGSMITH_API_KEY \
             -e LANGSMITH_PROJECT \
+            -e CURSOR_API_KEY \
+            -e CURSOR_DEMO_REPO \
+            -e CURSOR_AUTO_CREATE_PR \
             "${IMAGE_PATH}:main"
 
       - name: Verify container is running
         run: |
-          if [ "$(docker inspect -f '{{.State.Running}}' stapp 2>/dev/null)" != "true" ]; then
-            echo "The Streamlit container is not running. Recent logs:"
-            docker logs --tail 100 stapp 2>&1 || true
+          if [ "$(docker inspect -f '{{.State.Running}}' dexter 2>/dev/null)" != "true" ]; then
+            echo "The Dexter container is not running. Recent logs:"
+            docker logs --tail 100 dexter 2>&1 || true
             exit 1
           fi
 
-          echo "The Streamlit container is running."
-          docker ps --filter "name=^stapp$"
+          echo "The Dexter container is running."
+          docker ps --filter "name=^dexter$"
 
-      - name: Verify Streamlit health endpoint
+      - name: Verify Chainlit health endpoint
         run: |
-          # This image imports torch and sentence-transformers at startup, so
-          # "the process exists" is not the same as "the app is ready", and a
-          # config crash lands later still. Poll the real health endpoint.
           for attempt in $(seq 1 12); do
-            if docker exec stapp python -c \
-              "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health', timeout=3)" \
+            if docker exec dexter python -c \
+              "import urllib.request; urllib.request.urlopen('http://localhost:8000/', timeout=3)" \
               >/dev/null 2>&1; then
 
-              echo "Streamlit application is healthy."
+              echo "Chainlit application is healthy."
               exit 0
             fi
 
-            echo "Waiting for Streamlit to become ready..."
+            echo "Waiting for Chainlit to become ready..."
             sleep 5
           done
 
-          echo "Streamlit did not become healthy."
-          docker logs --tail 100 stapp 2>&1 || true
+          echo "Chainlit did not become healthy."
+          docker logs --tail 100 dexter 2>&1 || true
           exit 1
 
       # EC2 root volumes are small and this image is ~2GB per tag. Runs even

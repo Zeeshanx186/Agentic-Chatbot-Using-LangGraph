@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.11"
 dependencies = [
-    "chainlit>=2.12.0",
+    "chainlit==2.12.0",
     "ddgs>=9.15.0",
     "faiss-cpu>=1.15.0",
     "langchain-chroma>=1.1.0",
@@ -22,17 +22,24 @@ dependencies = [
     "langchain-text-splitters>=1.1.2",
     "langgraph>=1.2.11",
     "langgraph-checkpoint-sqlite>=3.1.1",
+    "langgraph-checkpoint-postgres==3.1.2",
+    "psycopg[binary,pool]==3.3.5",
     "onnxruntime>=1.29.0",
+    "opencv-python-headless>=4.10; sys_platform != 'win32'",
     "openpyxl>=3.1.5",
     "pandas>=3.0.5",
     "pypdf>=6.16.1",
     "python-dotenv>=1.2.3",
     "rapidocr>=3.9.2",
     "sentence-transformers>=6.0.0",
-    "streamlit==1.62.0",
+    "cursor-sdk",
     "tabulate>=0.10.0",
+    "torch>=2.6",
     "wikipedia>=1.4.0",
     "xlrd>=2.0.2",
+    "google-api-python-client>=2.200.0",
+    "google-auth-httplib2>=0.2.0",
+    "google-auth-oauthlib>=1.2.0",
 ]
 
 
@@ -41,3 +48,18 @@ dependencies = [
 dev = [
     "ipykernel>=7.3.0",
 ]
+
+[tool.vercel]
+entrypoint = "vercel_app:app"
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[tool.uv]
+# RapidOCR needs cv2, but Vercel has no desktop libGL. Windows retains its GUI wheel.
+override-dependencies = ["opencv-python; sys_platform == 'win32'"]

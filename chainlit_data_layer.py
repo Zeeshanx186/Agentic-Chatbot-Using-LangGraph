@@ -1,11 +1,11 @@
 """Custom Chainlit data layer backed by chat_store.py.
 
 Delegates thread listing, deletion, renaming, and feedback to the same
-persistence helpers that app.py (Streamlit) uses, so both UIs read and write
-the same agentic_chatbot.db / chat_titles.json / chat_feedback.json files.
+persistence helpers the Chainlit UI uses (agentic_chatbot.db / chat_titles.json
+/ chat_feedback.json, or cloud_store when enabled).
 
-Step and element persistence is handled by LangGraph's SqliteSaver checkpoint,
-so the corresponding methods here are intentional no-ops.
+Step and element persistence is handled by LangGraph's checkpointer, so the
+corresponding methods here are intentional no-ops.
 """
 
 import uuid

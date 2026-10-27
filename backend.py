@@ -7,6 +7,7 @@ import json
 import re
 import uuid
 import requests
+import cloud_store
 import socket
 import urllib.parse
 from zoneinfo import ZoneInfo
@@ -41,11 +42,16 @@ from langgraph.graph.message import add_messages
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt, Command
+from google_tools import GOOGLE_TOOLS
 
 
 load_dotenv()
 
-llm = ChatGroq(model="qwen/qwen3.6-27b", reasoning_effort="none", temperature=0)
+GROQ_GENERATION_OPTIONS = (
+    {"max_tokens": int(os.environ["GROQ_MAX_TOKENS"])}
+    if os.environ.get("GROQ_MAX_TOKENS") else {}
+)
+llm = ChatGroq(model="qwen/qwen3.6-27b", reasoning_effort="none", temperature=0, **GROQ_GENERATION_OPTIONS)
 DB_PATH = "faiss_db"
 
 # Building HuggingFaceEmbeddings costs ~27s: 15s to import torch and load the
@@ -76,6 +82,8 @@ def get_embeddings():
     return _embeddings
 
 def has_documents():
+    if cloud_store.ENABLED:
+        return cloud_store.get_object("rag/index") is not None
     return os.path.exists(os.path.join(DB_PATH, "index.faiss"))
 
 # tempfile.NamedTemporaryFile names, which is what PyPDFLoader records as the
@@ -134,6 +142,17 @@ def ingest_rag_document(file_path, display_name=None):
                            display_name or os.path.basename(file_path))
 
     embeddings = get_embeddings()
+    if cloud_store.ENABLED:
+        with cloud_store.rag_transaction() as conn:
+            stored = cloud_store.get_object("rag/index", conn)
+            if stored:
+                vectorstore = FAISS.deserialize_from_bytes(
+                    bytes(stored["data"]), embeddings, allow_dangerous_deserialization=True)
+                vectorstore.add_documents(chunks)
+            else:
+                vectorstore = FAISS.from_documents(chunks, embeddings)
+            cloud_store.put_object("rag/index", vectorstore.serialize_to_bytes(), conn=conn)
+        return
     if has_documents():
         # from_documents() + save_local() writes a brand new index, silently
         # dropping every PDF uploaded before this one. Merge into the existing
@@ -155,6 +174,11 @@ def get_retriever():
     from langchain_community.vectorstores import FAISS
 
     global _retriever
+    if cloud_store.ENABLED:
+        stored = cloud_store.get_object("rag/index")
+        vectorstore = FAISS.deserialize_from_bytes(
+            bytes(stored["data"]), get_embeddings(), allow_dangerous_deserialization=True)
+        return vectorstore.as_retriever(search_kwargs={"k": 5})
     if _retriever is None:
         vectorstore = FAISS.load_local(
             folder_path=DB_PATH, embeddings=get_embeddings(),
@@ -387,6 +411,7 @@ def inspect_table(file_path: str, sheet_name: str = None) -> str:
     header assumptions). Handles .xlsx/.xlsm/.xls and .csv/.tsv. Use this FIRST
     on any unfamiliar or dense file, before calling run_pandas_code.
     """
+    file_path = cloud_store.restore_path(file_path)
     extension = os.path.splitext(file_path)[1].lower()
 
     # The upload widget accepts CSV, so the first tool the model reaches for
@@ -467,7 +492,7 @@ INLINE_ROW_LIMIT = 25
 INLINE_CHAR_LIMIT = 2500
 PREVIEW_ROWS = 3
 
-EXTRACT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extracts")
+EXTRACT_DIR = str(cloud_store.DATA_ROOT / "extracts")
 EXTRACT_MARKER = "[EXTRACT:%s]"
 
 
@@ -476,12 +501,14 @@ def save_extract(df) -> str:
     os.makedirs(EXTRACT_DIR, exist_ok=True)
     extract_id = uuid.uuid4().hex[:8]
     df.to_csv(os.path.join(EXTRACT_DIR, extract_id + ".csv"), index=False)
+    cloud_store.persist_path(os.path.join(EXTRACT_DIR, extract_id + ".csv"))
     return extract_id
 
 
 def load_extract(extract_id):
     """Read back a stored extraction, or None if it is gone."""
     path = os.path.join(EXTRACT_DIR, extract_id + ".csv")
+    cloud_store.restore_path(path)
     if not os.path.exists(path):
         return None
     return pd.read_csv(path)
@@ -542,7 +569,7 @@ def run_pandas_code(code: str, file_path: str = "") -> str:
     # would raise NameError inside them.
     env = {
         "__builtins__": _SAFE_BUILTINS,
-        "path": file_path,
+        "path": cloud_store.restore_path(file_path),
         "pd": pd,
         "openpyxl": openpyxl,
     }
@@ -874,7 +901,8 @@ def get_ocr_engine():
 
         # Model weights ship inside the wheel, so unlike the previous engine
         # this does not reach the network on first call.
-        _ocr_engine = RapidOCR()
+        params = {"Global.model_root_dir": str(cloud_store.DATA_ROOT / "ocr_models")} if cloud_store.ENABLED else None
+        _ocr_engine = RapidOCR(params=params)
     return _ocr_engine
 
 
@@ -888,6 +916,7 @@ def extract_text_from_image(file_path: str) -> str:
     # The path arrives as model output echoing the frontend's "Attached file(s)"
     # note, so it can be hallucinated or stale. A plain sentence beats letting
     # the engine raise, which would surface as an opaque cv2 decode error.
+    file_path = cloud_store.restore_path(file_path)
     if not os.path.exists(file_path):
         return "No file at %s. Ask the user to attach the image again." % file_path
 
@@ -929,11 +958,13 @@ def save_chart(spec):
     path = os.path.join(EXTRACT_DIR, "chart_" + chart_id + ".json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(spec, f)
+    cloud_store.persist_path(path)
     return chart_id
 
 
 def load_chart(chart_id):
     path = os.path.join(EXTRACT_DIR, "chart_" + chart_id + ".json")
+    cloud_store.restore_path(path)
     if not os.path.exists(path):
         return None
     with open(path, encoding="utf-8") as f:
@@ -1001,6 +1032,8 @@ def plot_data(extract_id: str, kind: str, x: str, y: str = "") -> str:
 # --------------------------------------------------------------- memory
 
 def _ensure_memory_table():
+    if cloud_store.ENABLED:
+        return
     connection.execute(
         "CREATE TABLE IF NOT EXISTS memories ("
         "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -1015,6 +1048,15 @@ _MEMORY_STOPWORDS = {
     "the", "a", "an", "is", "are", "was", "were", "of", "to", "in", "on", "for",
     "and", "or", "my", "me", "i", "what", "whats", "do", "does", "did", "you",
 }
+
+
+def _memory_query(sql, params=()):
+    if cloud_store.ENABLED:
+        return cloud_store.memory_query(sql, params)
+    cursor = connection.execute(sql, params)
+    rows = cursor.fetchall() if cursor.description else []
+    connection.commit()
+    return rows
 
 
 def _memory_tokens(text):
@@ -1044,16 +1086,15 @@ def remember(fact: str, tag: str = "") -> str:
     if not fact:
         return "Error: nothing to remember."
 
-    existing = connection.execute("SELECT fact FROM memories").fetchall()
+    existing = _memory_query("SELECT fact FROM memories")
     if any(row[0].strip().lower() == fact.lower() for row in existing):
         return "Already remembered that."
 
-    connection.execute(
+    _memory_query(
         "INSERT INTO memories (fact, tag, created_at) VALUES (?, ?, ?)",
         (fact, tag.strip() or None,
          datetime.datetime.now().isoformat(timespec="seconds")),
     )
-    connection.commit()
     return f"Remembered: {fact}"
 
 
@@ -1064,9 +1105,9 @@ def recall(query: str, limit: int = 5) -> str:
     It returns facts they gave you in earlier conversations. This chat's history
     covers only this chat, so without this tool you know nothing about them.
     """
-    rows = connection.execute(
+    rows = _memory_query(
         "SELECT fact, tag, created_at FROM memories ORDER BY id DESC"
-    ).fetchall()
+    )
     if not rows:
         return "Nothing has been remembered yet."
 
@@ -1095,7 +1136,7 @@ def forget(query: str) -> str:
     Pass what they want gone, or "everything" to clear all of it. Without this
     tool a saved fact is permanent, so never tell the user you cannot delete one.
     """
-    rows = connection.execute("SELECT id, fact FROM memories").fetchall()
+    rows = _memory_query("SELECT id, fact FROM memories")
     if not rows:
         return "Nothing is remembered, so there is nothing to forget."
 
@@ -1121,10 +1162,8 @@ def forget(query: str) -> str:
         else:
             targets = [(row_id, fact) for score, row_id, fact in scored if score == best]
 
-    connection.executemany(
-        "DELETE FROM memories WHERE id = ?", [(row_id,) for row_id, _ in targets]
-    )
-    connection.commit()
+    for row_id, _ in targets:
+        _memory_query("DELETE FROM memories WHERE id = ?", (row_id,))
     return "Forgot:\n" + "\n".join("- " + fact for _, fact in targets)
 
 
@@ -1202,6 +1241,262 @@ def get_stock_history(symbol: str, days: int = 30) -> str:
     )
 
 
+# -------------------------------------------------------- Cursor cloud agent (demo)
+
+def _normalize_github_repo(repo: str) -> str:
+    """Accept org/repo or a full GitHub URL; return https://github.com/..."""
+    repo = (repo or "").strip().rstrip("/")
+    if not repo:
+        return ""
+    if repo.startswith("http://") or repo.startswith("https://"):
+        return repo
+    return "https://github.com/%s" % repo.lstrip("/")
+
+
+@tool
+def cursor_coding_agent(task_description: str, github_repo: str = "") -> str:
+    """
+    Run a Cursor Cloud Agent against a GitHub repository for coding or
+    debugging. Demo-oriented: uses composer-2.5 and consumes Cursor Pro usage.
+
+    Args:
+        task_description: Exact instructions for the coding or debugging task.
+        github_repo: GitHub URL or org/repo. Defaults to CURSOR_DEMO_REPO env.
+    """
+    api_key = (os.environ.get("CURSOR_API_KEY") or "").strip()
+    if not api_key:
+        return (
+            "Error: CURSOR_API_KEY is not set. Add a Cursor user API key from "
+            "https://cursor.com/dashboard/integrations to .env for this demo."
+        )
+
+    repo = _normalize_github_repo(
+        github_repo or os.environ.get("CURSOR_DEMO_REPO", "")
+    )
+    if not repo:
+        return (
+            "Error: No repository specified. Pass github_repo (org/repo or URL) "
+            "or set CURSOR_DEMO_REPO in the environment."
+        )
+
+    auto_pr = (os.environ.get("CURSOR_AUTO_CREATE_PR") or "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+    try:
+        from cursor_sdk import (
+            Agent,
+            AgentOptions,
+            CloudAgentOptions,
+            CloudRepository,
+            CursorAgentError,
+        )
+    except ImportError:
+        return "Error: cursor-sdk is not installed. Run: pip install cursor-sdk"
+
+    try:
+        result = Agent.prompt(
+            task_description,
+            AgentOptions(
+                api_key=api_key,
+                model="composer-2.5",
+                cloud=CloudAgentOptions(
+                    repos=[CloudRepository(url=repo)],
+                    auto_create_pr=auto_pr,
+                    skip_reviewer_request=True,
+                ),
+            ),
+        )
+    except CursorAgentError as err:
+        return "Error: Cursor agent failed to start: %s" % getattr(
+            err, "message", err
+        )
+    except Exception as err:
+        return "Error: Cursor agent failed: %s" % err
+
+    status = getattr(result, "status", "unknown")
+    text = (getattr(result, "result", None) or "").strip()
+    agent_id = getattr(result, "agent_id", None) or ""
+    git = getattr(result, "git", None)
+
+    lines = [
+        "Cursor cloud agent finished (status=%s)." % status,
+        "Repository: %s" % repo,
+    ]
+    if agent_id:
+        lines.append("Agent id: %s" % agent_id)
+    if git is not None:
+        for attr in ("branch_name", "pr_url", "url", "branch"):
+            value = getattr(git, attr, None)
+            if value:
+                lines.append("%s: %s" % (attr, value))
+        git_text = str(git).strip()
+        if git_text and git_text not in "\n".join(lines):
+            lines.append("git: %s" % git_text[:500])
+    if text:
+        lines.append("")
+        lines.append(text[:4000])
+    if status == "error":
+        return "Error: " + "\n".join(lines)
+    return "\n".join(lines)
+
+
+
+
+def extract_text_for_empowergpt(file_path: str, display_name: str | None = None) -> str:
+    """Extract plain text from a local file for EmpowerGPT document_text.
+
+    Supports .txt .md .csv .json .pdf .docx and images (.png/.jpg/.jpeg/.webp/.gif/.bmp/.tiff)
+    via the same RapidOCR path as extract_text_from_image. Returns empty string on failure.
+    Does not touch the RAG index.
+    """
+    path = file_path
+    name = display_name or os.path.basename(path)
+    ext = os.path.splitext(name)[1].lower()
+    image_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tiff", ".tif"}
+    try:
+        if ext in {".txt", ".md", ".csv"}:
+            with open(path, "rb") as f:
+                raw = f.read()
+            for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
+                try:
+                    return raw.decode(enc)
+                except UnicodeDecodeError:
+                    continue
+            return raw.decode("utf-8", errors="replace")
+        if ext == ".json":
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                text = f.read()
+            try:
+                import json as _json
+                return _json.dumps(_json.loads(text), indent=2, ensure_ascii=False)
+            except Exception:
+                return text
+        if ext == ".pdf":
+            from pypdf import PdfReader
+            reader = PdfReader(path)
+            parts = []
+            for page in reader.pages:
+                t = page.extract_text() or ""
+                if t.strip():
+                    parts.append(t)
+            return "\n\n".join(parts)
+        if ext == ".docx":
+            try:
+                from docx import Document
+            except ImportError:
+                return ""
+            doc = Document(path)
+            return "\n".join(p.text for p in doc.paragraphs if p.text)
+        if ext in image_exts:
+            # Reuse the normal-chat OCR engine so EmpowerGPT sees the same text.
+            ocr_path = path
+            cleanup = None
+            if ext not in {".png", ".jpg", ".jpeg"}:
+                try:
+                    from PIL import Image
+                    import tempfile
+                    img = Image.open(path)
+                    if getattr(img, "n_frames", 1) > 1:
+                        img.seek(0)
+                    if img.mode not in ("RGB", "L"):
+                        img = img.convert("RGB")
+                    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                    tmp.close()
+                    img.save(tmp.name, format="PNG")
+                    ocr_path = tmp.name
+                    cleanup = tmp.name
+                except Exception:
+                    ocr_path = path
+            try:
+                result = get_ocr_engine()(ocr_path)
+            finally:
+                if cleanup:
+                    try:
+                        os.unlink(cleanup)
+                    except OSError:
+                        pass
+            lines = _rows_from_boxes(result.boxes, result.txts or ())
+            lines = _strip_line_numbers(lines)
+            return "\n".join(lines) if lines else ""
+    except Exception:
+        return ""
+    return ""
+
+
+
+@tool
+def empowergpt_ask(query: str, document_text: str = "", document_names: str = "") -> str:
+    """
+    Ask the local EmpowerGPT workflow API a question and return its answer.
+
+    Prefer this when the user wants EmpowerGPT / enterprise workflow answers
+    (not general web search). Requires EMPOWERGPT_ENABLED=true and a running
+    local API (default http://127.0.0.1:8787).
+
+    When the user attached documents for an EmpowerGPT ask, pass their extracted
+    plain text in document_text (and optional comma-separated document_names).
+    The local API folds that text into the workflow query.
+
+    Args:
+        query: The user question to send to EmpowerGPT.
+        document_text: Optional extracted text from attached files.
+        document_names: Optional comma-separated file names matching document_text
+            sections (or a single name if one blob).
+    """
+    base = (os.environ.get("EMPOWERGPT_LOCAL_URL") or "http://127.0.0.1:8787").rstrip("/")
+    url = base + "/ask"
+    payload = {"query": query}
+    doc_text = (document_text or "").strip()
+    if doc_text:
+        names = [n.strip() for n in (document_names or "").split(",") if n.strip()]
+        if len(names) == 1:
+            docs = [{"name": names[0], "text": doc_text}]
+        elif len(names) > 1:
+            # Multiple names with one blob: use first name; agent should prefer
+            # one combined blob or call once per file when possible.
+            docs = [{"name": names[0], "text": doc_text}]
+        else:
+            docs = [{"name": "attached_document", "text": doc_text}]
+        payload["documents"] = docs
+    try:
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=float(os.environ.get("EMPOWERGPT_TIMEOUT_SEC") or "180"),
+        )
+    except requests.exceptions.RequestException as e:
+        return (
+            "Error: EmpowerGPT local API call failed (%s). "
+            "Is uvicorn running at %s? Start with: "
+            'powershell -File "D:\\Personal Projects\\empowergpt-local-api\\start.ps1"'
+            % (e, base)
+        )
+    if response.status_code >= 400:
+        body = (response.text or "")[:500]
+        return (
+            "Error: EmpowerGPT /ask returned HTTP %s. Body: %s. "
+            "Try POST /auth/refresh on the local API, or re-run start.ps1."
+            % (response.status_code, body)
+        )
+
+    try:
+        data = response.json()
+    except ValueError:
+        return "Error: EmpowerGPT returned non-JSON: %s" % response.text[:500]
+
+    answer = data.get("answer")
+    run_id = data.get("run_id")
+    status = data.get("status")
+    detail = data.get("detail")
+    if answer:
+        return "EmpowerGPT (run_id=%s, status=%s):\n%s" % (run_id, status, answer)
+    return (
+        "EmpowerGPT returned no answer (run_id=%s, status=%s). %s"
+        % (run_id, status, detail or "")
+    ).strip()
+
+
 # web_search, not search_tool: the wrapper is what falls back to DuckDuckGo
 # when Tavily rate-limits. Binding the raw tool left that fallback dead.
 tools = [
@@ -1210,7 +1505,16 @@ tools = [
     get_weather, get_stock_price, get_stock_history, purchase_stock,
     inspect_table, run_pandas_code, plot_data,
     remember, recall, forget,
+    cursor_coding_agent,
+    *GOOGLE_TOOLS,
 ]
+
+# Optional local EmpowerGPT workflow proxy (see README). Off by default.
+_EMPOWERGPT_ENABLED = (os.environ.get("EMPOWERGPT_ENABLED") or "").strip().lower() in {
+    "1", "true", "yes", "on",
+}
+if _EMPOWERGPT_ENABLED:
+    tools.append(empowergpt_ask)
 
 
 DEFAULT_MODEL = "qwen/qwen3.6-27b"
@@ -1276,11 +1580,11 @@ def set_model(model_id: str, provider: str = "groq"):
             keep_alive="30m",
         )
     elif model_id.startswith("qwen"):
-        llm = ChatGroq(model=model_id, reasoning_effort="none", temperature=0)
+        llm = ChatGroq(model=model_id, reasoning_effort="none", temperature=0, **GROQ_GENERATION_OPTIONS)
     elif "gpt-oss" in model_id:
-        llm = ChatGroq(model=model_id, reasoning_effort="low", temperature=0)
+        llm = ChatGroq(model=model_id, reasoning_effort="low", temperature=0, **GROQ_GENERATION_OPTIONS)
     else:
-        llm = ChatGroq(model=model_id, temperature=0)
+        llm = ChatGroq(model=model_id, temperature=0, **GROQ_GENERATION_OPTIONS)
 
     current_model = model_id
     current_provider = provider
@@ -1410,8 +1714,12 @@ class Chatstate(TypedDict, total=False):
 # Tool groupings
 data_tools = [run_pandas_code, inspect_table, plot_data]
 research_tools = [web_search, fetch_url, wikipedia, retriever_tool, extract_text_from_image]
+if _EMPOWERGPT_ENABLED:
+    research_tools.append(empowergpt_ask)
 financial_tools = [get_stock_price, get_stock_history, purchase_stock, get_weather]
 memory_tools = [remember, recall, forget, get_current_datetime]
+coding_tools = [cursor_coding_agent]
+google_tools = list(GOOGLE_TOOLS)
 
 def make_agent(name: str, system_prompt: str, tools_list: list):
     prompt = SystemMessage(content=system_prompt + "\n\n" + (
@@ -1468,8 +1776,7 @@ Data_Agent = make_agent(
     data_tools
 )
 
-Research_Agent = make_agent(
-    "Research_Agent",
+_RESEARCH_SYSTEM = (
     "You are the Research Agent. You search the web, fetch URLs, query Wikipedia, and read internal RAG documents. "
     "Do not invent information. Always rely on your tools for external facts. "
     # Handed "find the capital, its area and its population" it also went and
@@ -1492,7 +1799,19 @@ Research_Agent = make_agent(
     "20%, name the number you are using, say in one clause why that source wins "
     "(more recent, primary, better matched to what was asked), and mention the "
     "others only as a brief aside. Never hand on a list of candidates. Prefer "
-    "dated, primary sources over social posts and undated pages.",
+    "dated, primary sources over social posts and undated pages."
+)
+if _EMPOWERGPT_ENABLED:
+    _RESEARCH_SYSTEM += (
+        " When the user asks EmpowerGPT (or names empowergpt_ask), call empowergpt_ask "
+        "with their question and answer from that result instead of web search. "
+        "If the user attached files for that ask and the message includes extracted "
+        "document text (or an EmpowerGPT document note), pass it as document_text "
+        "(and document_names when given). Do not web-search those attachments."
+    )
+Research_Agent = make_agent(
+    "Research_Agent",
+    _RESEARCH_SYSTEM,
     research_tools
 )
 
@@ -1521,9 +1840,39 @@ Memory_Agent = make_agent(
     memory_tools
 )
 
+Coding_Agent = make_agent(
+    "Coding_Agent",
+    "You are the Coding Agent. You delegate repository coding and debugging work to "
+    "Cursor Cloud Agents via cursor_coding_agent. "
+    "Call cursor_coding_agent with a precise task_description and a github_repo "
+    "(org/repo or full URL) when the user names one; otherwise omit github_repo so "
+    "the CURSOR_DEMO_REPO default is used. "
+    "Summarize the tool result for the user: status, agent id, any PR/branch links, "
+    "and the key outcome. Do not invent diffs or claim a PR was opened unless the "
+    "tool output says so. Runs can take one to two minutes - tell the user you "
+    "started the cloud agent before summarizing the result.",
+    coding_tools,
+)
+
+Google_Agent = make_agent(
+    "Google_Agent",
+    "You are the Google Workspace Agent. You manage Gmail and Google Calendar. "
+    "You search emails (gmail_search_emails), read specific emails (gmail_read_email), "
+    "create draft emails (gmail_create_draft), send emails (gmail_send_email), "
+    "list upcoming calendar events (calendar_list_events), create calendar events (calendar_create_event), "
+    "and delete calendar events (calendar_delete_event). "
+    "Be precise with dates, times, attendees, subjects, and email addresses. "
+    "Never ask the user to confirm sending an email or deleting an event in plain text chat - "
+    "the chat input is locked while approval is pending, so call gmail_send_email or calendar_delete_event "
+    "directly; they have their own interactive approval step.",
+    google_tools,
+)
+
 # ---------------------------------------------------------------- planning
 
-AGENT_NAMES = ("Data_Agent", "Research_Agent", "Financial_Agent", "Memory_Agent")
+AGENT_NAMES = (
+    "Data_Agent", "Research_Agent", "Financial_Agent", "Memory_Agent", "Coding_Agent", "Google_Agent",
+)
 
 # Which agent actually owns each tool. Built from the same lists the agents bind,
 # so it cannot drift the way a hand-written mapping would.
@@ -1533,6 +1882,8 @@ for _owner, _owned in (
     ("Research_Agent", research_tools),
     ("Financial_Agent", financial_tools),
     ("Memory_Agent", memory_tools),
+    ("Coding_Agent", coding_tools),
+    ("Google_Agent", google_tools),
 ):
     for _tool in _owned:
         TOOL_OWNER.setdefault(_tool.name, _owner)
@@ -1585,8 +1936,18 @@ _TASK_WORD_OWNERS = (
         r"\b(multiply|multiplied|divide|divided|calculat|comput|arithmetic|product of"
         r"|sum of|average of|convert|how many\b.{0,40}\b(buy|afford|purchase))",
         re.IGNORECASE)),
+    ("Research_Agent", re.compile(
+        r"\b(empowergpt_ask|empower\s*gpt|empowergpt)\b",
+        re.IGNORECASE)),
+    ("Coding_Agent", re.compile(
+        r"\b(cursor_coding_agent|debug|refactor|fix the (bug|code)|open a (pr|pull request)"
+        r"|pull request|codebase|github\.com/)\b",
+        re.IGNORECASE)),
     ("Financial_Agent", re.compile(
         r"\b(weather|temperature|forecast|humidity|climate|stock price|share price|quote)\b",
+        re.IGNORECASE)),
+    ("Google_Agent", re.compile(
+        r"\b(gmail|emails?|inbox|send email|draft email|calendar|schedule|meeting|events?|appointment)\b",
         re.IGNORECASE)),
 )
 
@@ -1651,7 +2012,9 @@ _ERROR_PATTERN = re.compile("|".join(_ERROR_PATTERNS), re.IGNORECASE)
 
 
 class PlanStep(BaseModel):
-    agent: Literal["Data_Agent", "Research_Agent", "Financial_Agent", "Memory_Agent"] = Field(
+    agent: Literal[
+        "Data_Agent", "Research_Agent", "Financial_Agent", "Memory_Agent", "Coding_Agent", "Google_Agent",
+    ] = Field(
         description="Which specialist performs this step."
     )
     task: str = Field(
@@ -1673,9 +2036,14 @@ PLANNER_PROMPT = SystemMessage(content=(
     # it instead and a two-image turn was planned as "ask the user to upload the
     # images" - to Memory_Agent, which has no OCR tool.
     "- Research_Agent: web search, fetching URLs, Wikipedia, uploaded RAG PDFs, "
-    "reading text out of attached images and screenshots.\n"
+    "reading text out of attached images and screenshots"
+    + (", EmpowerGPT via empowergpt_ask" if _EMPOWERGPT_ENABLED else "")
+    + ".\n"
     "- Financial_Agent: stock quotes and history, stock purchases, weather.\n"
-    "- Memory_Agent: greetings, general chat, remembering/recalling user facts, date and time.\n\n"
+    "- Memory_Agent: greetings, general chat, remembering/recalling user facts, date and time.\n"
+    "- Coding_Agent: repository coding, debugging, refactors, and opening PRs via "
+    "Cursor Cloud Agents (cursor_coding_agent).\n"
+    "- Google_Agent: Gmail (search, read, draft, send emails) and Google Calendar (list, schedule, delete events).\n\n"
     "Rules:\n"
     "1. Greetings, chit-chat and anything answerable directly = ONE step to Memory_Agent.\n"
     "2. Only add a second step when it genuinely needs a DIFFERENT specialist "
@@ -1686,14 +2054,21 @@ PLANNER_PROMPT = SystemMessage(content=(
     # Routing is reassigned from the tool name when the step names one, so
     # naming it is the cheapest way to get the step to the right agent.
     "5. Name the exact tool the step needs (get_weather, run_pandas_code, "
-    "get_stock_price, web_search, wikipedia, extract_text_from_image). Routing "
-    "follows the tool you name.\n"
+    "get_stock_price, web_search, wikipedia, extract_text_from_image, "
+    "cursor_coding_agent, gmail_search_emails, gmail_read_email, gmail_create_draft, "
+    "gmail_send_email, calendar_list_events, calendar_create_event, calendar_delete_event"
+    + (", empowergpt_ask" if _EMPOWERGPT_ENABLED else "")
+    + "). Routing follows the tool you name.\n"
     # No agent has a calculator in its head. Every number an LLM 'computes' in
     # prose is a guess that happens to look like a digit, and one of them came
     # out 195,600 when the answer was 195,603.
     "6. ANY arithmetic - multiply, divide, compare two quantities, convert units - "
     "is its own run_pandas_code step for Data_Agent. Never leave a calculation "
-    "inside a step that is really about looking something up."
+    "inside a step that is really about looking something up.\n"
+    "7. Codebase fix/debug/refactor/PR requests = ONE step to Coding_Agent with "
+    "cursor_coding_agent. Do not send those to Research_Agent.\n"
+    "8. Gmail or Calendar requests (checking emails, sending emails, creating drafts, "
+    "listing/creating/deleting calendar events) = ONE step to Google_Agent."
 ))
 
 
@@ -1811,7 +2186,7 @@ def _legacy_route(messages):
         response = llm.invoke(
             [SystemMessage(content=(
                 "Reply with exactly one of: Data_Agent, Research_Agent, "
-                "Financial_Agent, Memory_Agent."
+                "Financial_Agent, Memory_Agent, Coding_Agent, Google_Agent."
             )), HumanMessage(content=_last_human_text(messages))],
             config={"callbacks": []},
         )
@@ -2094,8 +2469,12 @@ def synthesizer_node(state: Chatstate):
 # Tool Node
 tool_node = ToolNode(tools)
 
-connection = sqlite3.connect(database="agentic_chatbot.db", check_same_thread=False)
-checkpoint = SqliteSaver(connection)
+if cloud_store.ENABLED:
+    connection = None
+    checkpoint = cloud_store.checkpoint()
+else:
+    connection = sqlite3.connect(database="agentic_chatbot.db", check_same_thread=False)
+    checkpoint = SqliteSaver(connection)
 _ensure_memory_table()
 
 graph = StateGraph(Chatstate)
@@ -2106,6 +2485,8 @@ graph.add_node("Data_Agent", Data_Agent)
 graph.add_node("Research_Agent", Research_Agent)
 graph.add_node("Financial_Agent", Financial_Agent)
 graph.add_node("Memory_Agent", Memory_Agent)
+graph.add_node("Coding_Agent", Coding_Agent)
+graph.add_node("Google_Agent", Google_Agent)
 graph.add_node("tools", tool_node)
 graph.add_node("synthesizer", synthesizer_node)
 
@@ -2133,12 +2514,16 @@ graph.add_conditional_edges("supervisor", route_from_supervisor, {
     "Research_Agent": "Research_Agent",
     "Financial_Agent": "Financial_Agent",
     "Memory_Agent": "Memory_Agent",
+    "Coding_Agent": "Coding_Agent",
+    "Google_Agent": "Google_Agent",
     "synthesizer": "synthesizer"
 })
 
 graph.add_edge("synthesizer", END)
 
-for agent in ["Data_Agent", "Research_Agent", "Financial_Agent", "Memory_Agent"]:
+for agent in [
+    "Data_Agent", "Research_Agent", "Financial_Agent", "Memory_Agent", "Coding_Agent", "Google_Agent",
+]:
     graph.add_conditional_edges(agent, route_from_agent, {
         "tools": "tools",
         "supervisor": "supervisor"
@@ -2148,7 +2533,9 @@ graph.add_conditional_edges("tools", route_after_tool, {
     "Data_Agent": "Data_Agent",
     "Research_Agent": "Research_Agent",
     "Financial_Agent": "Financial_Agent",
-    "Memory_Agent": "Memory_Agent"
+    "Memory_Agent": "Memory_Agent",
+    "Coding_Agent": "Coding_Agent",
+    "Google_Agent": "Google_Agent",
 })
 
 chatbot =graph.compile(checkpointer=checkpoint)

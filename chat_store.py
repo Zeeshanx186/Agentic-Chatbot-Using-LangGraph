@@ -12,6 +12,7 @@ import json
 import os
 import re
 import requests
+import cloud_store
 
 TITLES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_titles.json")
 FEEDBACK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "chat_feedback.json")
@@ -131,6 +132,8 @@ def _write_json(path, data):
 
 
 def load_titles():
+    if cloud_store.ENABLED:
+        return cloud_store.metadata_all("titles")
     return _read_json(TITLES_PATH)
 
 
@@ -139,12 +142,16 @@ def _write_titles(titles):
 
 
 def save_title(thread_id, title):
+    if cloud_store.ENABLED:
+        return cloud_store.metadata_set("titles", thread_id, title)
     titles = load_titles()
     titles[thread_id] = title
     _write_titles(titles)
 
 
 def delete_title(thread_id):
+    if cloud_store.ENABLED:
+        return cloud_store.metadata_set("titles", thread_id, None)
     titles = load_titles()
     if titles.pop(thread_id, None) is not None:
         _write_titles(titles)
@@ -173,11 +180,19 @@ def fallback_title(first_message):
 
 def load_feedback():
     """Thumbs ratings, as {thread_id: {message_index: 0|1}}."""
+    if cloud_store.ENABLED:
+        feedback = {}
+        for key, value in cloud_store.metadata_all("feedback").items():
+            thread, index = key.rsplit(":", 1)
+            feedback.setdefault(thread, {})[index] = value
+        return feedback
     return _read_json(FEEDBACK_PATH)
 
 
 def save_feedback(thread_id, index, value):
     """Record one thumbs rating. A cleared rating drops the entry."""
+    if cloud_store.ENABLED:
+        return cloud_store.metadata_set("feedback", f"{thread_id}:{index}", value)
     feedback = load_feedback()
     thread = feedback.setdefault(thread_id, {})
     if value is None:
@@ -292,7 +307,8 @@ def attached_images(text):
     """
     return [
         path for path in attachment_paths(text)
-        if os.path.splitext(path)[1].lower() in _IMAGE_EXTENSIONS and os.path.exists(path)
+        if os.path.splitext(path)[1].lower() in _IMAGE_EXTENSIONS
+        and os.path.exists(cloud_store.restore_path(path))
     ]
 
 

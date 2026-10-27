@@ -1,7 +1,8 @@
 # Agentic-Chatbot-Using-LangGraph
 
-Streamlit chatbot built on LangGraph. Tool-calling agent with web search, weather,
-stock lookup, math, and RAG over uploaded PDFs. Runs locally or in Docker.
+Chainlit chatbot (Dexter) built on LangGraph. Tool-calling agents with web
+search, weather, stock lookup, math, RAG over uploaded PDFs, and a demo Cursor
+Cloud Agent tool. Runs locally or in Docker.
 
 ---
 
@@ -29,10 +30,10 @@ stock lookup, math, and RAG over uploaded PDFs. Runs locally or in Docker.
 Image already built, just want it running:
 
 ```bash
-docker run -d --name agenticbot -p 8502:8501 --env-file .env zeeshanyq/agenticbot:latest
+docker run -d --name dexter -p 8000:8000 --env-file .env zeeshanyq/agenticbot:latest
 ```
 
-Open [http://localhost:850](http://localhost:8502)1
+Open [http://localhost:8000](http://localhost:8000)
 
 ---
 
@@ -50,7 +51,10 @@ All secrets live in `.env` at the project root. **Not committed** — excluded b
 | `ALPHAVANTAGE_API_KEY` | for stock tool    | Stock prices                                          |
 | `OPENROUTER_API_KEY`   | optional          | OpenRouter models in picker                           |
 | `OPENAI_API_KEY`       | optional          | OpenAI models                                         |
-| `GOOGLE_API_KEY`       | for Google models | Gemini models in picker —**currently missing** |
+| `GOOGLE_API_KEY`       | for Google models | Gemini models in picker                               |
+| `CURSOR_API_KEY`       | for coding demo   | Cursor Cloud Agent SDK ([Integrations](https://cursor.com/dashboard/integrations)) |
+| `CURSOR_DEMO_REPO`     | for coding demo   | Default GitHub `org/repo` or URL for `cursor_coding_agent` |
+| `CURSOR_AUTO_CREATE_PR`| optional          | Set `true` to open a PR after cloud agent runs        |
 | `LANGSMITH_TRACING`    | optional          | Trace runs to LangSmith                               |
 | `LANGSMITH_ENDPOINT`   | optional          | LangSmith endpoint                                    |
 | `LANGSMITH_API_KEY`    | optional          | LangSmith auth                                        |
@@ -81,13 +85,14 @@ Install:
 uv sync
 ```
 
-Run:
+Run Chainlit:
 
 ```bash
-uv run streamlit run app.py
+uv run chainlit run chainlit_app.py
 ```
 
-Opens on [http://localhost:8501](http://localhost:8501)
+Opens on [http://localhost:8000](http://localhost:8000) by default (or the port
+Chainlit prints).
 
 ---
 
@@ -110,6 +115,7 @@ docker build --no-cache -t zeeshanyq/agenticbot:latest .
 ```
 
 First build takes ~5-10 minutes: `sentence-transformers` pulls torch,
+onnxruntime, and related wheels.
 transformers, scikit-learn and scipy — roughly 1GB of wheels. It's bandwidth,
 not CPU. Later builds are seconds as long as `requirements.txt` is untouched,
 because the Dockerfile installs dependencies *before* copying the app code.
@@ -119,25 +125,23 @@ because the Dockerfile installs dependencies *before* copying the app code.
 Foreground — logs print to the terminal, Ctrl+C stops it:
 
 ```bash
-docker run -p 8502:8501 --env-file .env zeeshanyq/agenticbot:latest
+docker run -p 8000:8000 --env-file .env zeeshanyq/agenticbot:latest
 ```
 
 Detached and named — the normal way:
 
 ```bash
-docker run -d --name agenticbot -p 8502:8501 --env-file .env zeeshanyq/agenticbot:latest
+docker run -d --name dexter -p 8000:8000 --env-file .env zeeshanyq/agenticbot:latest
 ```
 
 Throwaway run, container auto-deletes on stop:
 
 ```bash
-docker run --rm -p 8502:8501 --env-file .env zeeshanyq/agenticbot:latest
+docker run --rm -p 8000:8000 --env-file .env zeeshanyq/agenticbot:latest
 ```
 
-**About `-p 8502:8501`:** left side is the port on your machine, right side is
-the port inside the container. Streamlit always listens on 8501 internally.
-Using 8502 outside keeps the local `streamlit run` on 8501 free, so both can run
-at once. `-p 8501:8501` works too if nothing local is using it.
+Chainlit listens on **8000** inside the container. Map another host port with
+`-p 8001:8000` if 8000 is already taken.
 
 **Env vars are read at run time, not baked into the image.** Editing `.env`
 needs only a container restart, never a rebuild.
@@ -165,13 +169,13 @@ docker images
 Follow logs of a detached container:
 
 ```bash
-docker logs -f agenticbot
+docker logs -f dexter
 ```
 
 Shell inside a running container:
 
 ```bash
-docker exec -it agenticbot /bin/bash
+docker exec -it dexter /bin/bash
 ```
 
 ### Stop and remove containers
@@ -179,29 +183,29 @@ docker exec -it agenticbot /bin/bash
 Stop:
 
 ```bash
-docker stop agenticbot
+docker stop dexter
 ```
 
 Start the same container again, state preserved:
 
 ```bash
-docker start agenticbot
+docker start dexter
 ```
 
 Remove a stopped container:
 
 ```bash
-docker rm agenticbot
+docker rm dexter
 ```
 
 Stop and remove in one step:
 
 ```bash
-docker rm -f agenticbot
+docker rm -f dexter
 ```
 
 A named container can't be created twice — remove the old one before reusing
-the name `agenticbot`.
+the name `dexter`.
 
 ### Remove images
 
@@ -254,7 +258,7 @@ docker system prune -a
 After changing code:
 
 ```bash
-docker rm -f agenticbot
+docker rm -f dexter
 ```
 
 ```bash
@@ -262,7 +266,7 @@ docker build -t zeeshanyq/agenticbot:latest .
 ```
 
 ```bash
-docker run -d --name agenticbot -p 8502:8501 --env-file .env zeeshanyq/agenticbot:latest
+docker run -d --name dexter -p 8000:8000 --env-file .env zeeshanyq/agenticbot:latest
 ```
 
 Step 2 is fast unless `requirements.txt` changed.
@@ -298,13 +302,13 @@ exactly 32 characters — 33 means a space snuck in.
 
 ### `ports are not available: ... bind: Only one usage of each socket address`
 
-Something already holds that port, usually a local `streamlit run`. Find it:
+Something already holds that port, usually another Chainlit/local process. Find it:
 
 ```bash
-netstat -ano | grep ":8501"
+netstat -ano | grep ":8000"
 ```
 
-Then either map a different host port (`-p 8502:8501`), or stop that process
+Then either map a different host port (`-p 8001:8000`), or stop that process
 with `taskkill //PID <pid> //F`.
 
 ### Image is enormous (6-7GB)
@@ -325,8 +329,9 @@ need a GPU, and containers have no GPU access unless explicitly configured.
 
 | File                             | Purpose                                                |
 | -------------------------------- | ------------------------------------------------------ |
-| `app.py`                       | Streamlit UI, chat loop, file upload                   |
+| `chainlit_app.py`              | Chainlit UI, chat loop, file upload                    |
 | `backend.py`                   | LangGraph graph, tools, model selection                |
+| `google_tools.py`              | Gmail & Calendar tools with OAuth 2.0 & HITL approval  |
 | `chat_store.py`                | Chat persistence, titles, model catalog                |
 | `pyproject.toml` + `uv.lock` | Dependencies for local dev (uv)                        |
 | `requirements.txt`             | Dependencies for the Docker build (pip)                |
@@ -339,6 +344,67 @@ need a GPU, and containers have no GPU access unless explicitly configured.
 | `agentic_chatbot.db`           | SQLite checkpointer, local chat history                |
 
 ---
+
+## Google Workspace: Gmail & Google Calendar
+
+Dexter includes a dedicated **Google_Agent** that connects to your Gmail and Google Calendar via OAuth 2.0.
+
+### Available Tools
+
+- **Gmail**:
+  - `gmail_search_emails`: Search inbox with Gmail search syntax (e.g. `is:unread`, `from:someone@example.com`).
+  - `gmail_read_email`: Read full message content by message ID.
+  - `gmail_create_draft`: Compose a draft email without sending.
+  - `gmail_send_email`: Send an email (**Requires Human-in-the-Loop approval**).
+- **Google Calendar**:
+  - `calendar_list_events`: List upcoming events from your primary calendar.
+  - `calendar_create_event`: Create and schedule a new calendar event.
+  - `calendar_delete_event`: Delete a scheduled event (**Requires Human-in-the-Loop approval**).
+
+### Setting Up Google Credentials
+
+1. Open the [Google Cloud Console](https://console.cloud.google.com/).
+2. Create a project and enable both:
+   - **Gmail API**
+   - **Google Calendar API**
+3. Configure the **OAuth Consent Screen** (User Type: External, add your email under Test Users).
+4. Go to **Credentials** -> **Create Credentials** -> **OAuth Client ID**.
+5. Select application type: **Desktop App**.
+6. Download the generated JSON credentials file and rename it to `credentials.json` at the root of this project.
+7. The first time you ask Dexter to interact with Gmail or Calendar, a browser tab will automatically open asking you to sign in with Google and grant permissions. Upon sign-in, a cached `token.json` is saved locally for seamless future access.
+
+
+
+---
+
+
+
+1. Start the local API (binds `127.0.0.1:8787` only):
+
+```powershell
+```
+
+2. In Dexter `.env`:
+
+```
+```
+
+3. Start Dexter:
+
+```bash
+uv run chainlit run chainlit_app.py
+```
+
+
+Attach `.txt` / `.md` / `.csv` / `.json` / `.pdf` / `.docx` and say e.g.
+API folds `documents` into the webhook query (cap ~80k chars).
+
+Smoke-test the tool without the UI:
+
+```powershell
+cd "D:\Personal Projects\Deployment_Agentic_Chatbot\Agentic-Chatbot-Using-LangGraph"
+```
+
 
 ## Notes and TODO
 
